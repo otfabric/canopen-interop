@@ -572,9 +572,15 @@ def suite_emcy(caps):
 
 # ── pdo ─────────────────────────────────────────────────────────────────────
 
-def increasing(events, key="0x2002:00"):
+def increasing(events, key="0x2002:00", strict=True):
+    """The counter in successive PDOs increases. With an event timer a PDO may
+    repeat the last value (strict=False: never decreasing, rising overall)."""
     vals = [int.from_bytes(bytes.fromhex(e["values"][key]), "little") for e in events if key in e.get("values", {})]
-    return len(vals) == len(events) and all(b > a for a, b in zip(vals, vals[1:])), vals
+    if strict:
+        ok = all(b > a for a, b in zip(vals, vals[1:]))
+    else:
+        ok = all(b >= a for a, b in zip(vals, vals[1:])) and len(vals) > 1 and vals[-1] > vals[0]
+    return len(vals) == len(events) and ok, vals
 
 
 def suite_pdo(caps):
@@ -618,13 +624,13 @@ def suite_pdo(caps):
                       if configured else "exit %d: %s" % (code, result_of(docs).get("message", "")), configurer, d, start)
                 for m in masters if configured else []:
                     start = time.monotonic()
-                    code, docs, _ = run(m, ["pdo-receive"] + base + ["--tpdo", 2, "--count", 3, "--timeout-ms", 5000])
+                    code, docs, _ = run(m, ["pdo-receive"] + base + ["--tpdo", 2, "--count", 4, "--timeout-ms", 5000])
                     ev = [x for x in docs if x.get("type") == "pdo"]
-                    ok, vals = increasing(ev)
+                    ok, vals = increasing(ev, strict=False)
                     ok = ok and all(e["values"].get("0x2001:00") == "3322" for e in ev)
-                    check("pdo", "tpdo2-configured", code == 0 and ok and len(ev) == 3,
-                          "3 PDOs, counter %s, 0x2001 3322" % vals if code == 0 and ok else "exit %d: %s" % (
-                              code, [e.get("values") for e in ev] or result_of(docs).get("message", "")), m, d, start)
+                    check("pdo", "tpdo2-configured", code == 0 and ok and len(ev) == 4,
+                          "4 PDOs, counter %s, 0x2001 3322" % vals if code == 0 and ok else "exit %d: counter %s %s" % (
+                              code, vals, [e.get("values") for e in ev] or result_of(docs).get("message", "")), m, d, start)
                 code, docs, _ = run(configurer, ["pdo-configure"] + base + [
                     "--tpdo", 3, "--map", "0x2002:00:32", "--transmission-type", 1])
                 if code != 0:
