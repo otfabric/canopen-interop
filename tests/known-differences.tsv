@@ -1,0 +1,8 @@
+# Accepted differences between the stacks, reported by scripts/selftest.py as "known", never as "pass".
+# Columns (tab-separated): suite	scenario (glob)	master (glob, - = none)	device (glob, - = none)	explanation
+sdo	abort-no-subindex	*	pythoncanopen	python canopen's LocalNode ignores the sub-index of a VAR object (0x2000): an upload of 0x2000:01 returns 0x2000:00 instead of aborting with 0x06090011.
+sdo	download-*-domain	canopennode	lely	CANopenNode's ASCII gateway starts a download of 1024 bytes without size indication (it streams the hex data); lely's SDO server aborts the first segment into the DOMAIN 0x2005 with 0x06070012 when no size is indicated. The python canopen and lely clients indicate the size and pass.
+od	empty-domain	*	pythoncanopen	python canopen's LocalNode aborts an upload of a DOMAIN that was never written (no default) with 0x060A0023 "resource not available"; CANopenNode and lely return 0 bytes.
+eds	valid-object-links.eds	lely	-	Lely's dcf-tools (lint) do not know the CiA 306 [<index>ObjectLinks] section: "unknown section in DCF: 2200ObjectLinks", and lint fails. python canopen ignores the section.
+eds	agree-compact-subobj.eds	*	*	CompactSubObj: Lely's dcf-tools create sub-objects 1..n (NrOfObjects, ro); python canopen creates sub 0 "Number of entries" (rw, no default) and only sub 1, generating further sub-objects on access.
+od	empty-domain	*	canopennode	CANopenNode's SDO server cannot upload 0 bytes: a read that returns no data is treated as incomplete and aborted with 0x06040047 (CO_SDOserver.c, "bufOffsetWr == 0"). The DOMAIN 0x2005 is empty until written.

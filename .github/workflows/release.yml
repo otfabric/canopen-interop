@@ -1,0 +1,132 @@
+name: Release
+run-name: "Release ${{ github.ref_name }}"
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # create the GitHub release
+  packages: write   # push to GHCR
+
+env:
+  REGISTRY: ghcr.io/otfabric
+  BASE_REGISTRY: mirror.gcr.io/library
+  TOOLS_REGISTRY: mirror.gcr.io
+  VERSION: ${{ github.ref_name }}
+
+jobs:
+  # One job per architecture on a runner of that architecture: every image is
+  # built natively and self-tested on vcan, and exactly the tested images are
+  # pushed as <image>:<version>-<arch>.
+  build:
+    name: Build, test, push (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema
+
+      - name: Validate
+        run: |
+          make validate
+          want="interop_version: \"${VERSION#v}\""
+          grep -qF "$want" versions.yaml || { echo "::error::versions.yaml does not say $want"; exit 1; }
+          scripts/release-notes.sh "${VERSION}" > /dev/null
+
+      - name: Load the CAN modules and create vcan0
+        run: scripts/ci-can-modules.sh && make vcan ADMIN=sudo
+
+      - name: Build for linux/${{ matrix.arch }} and self-test
+        run: |
+          make -j3 --output-sync=target images
+          make smoke
+          make selftest
+          make documents
+
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: selftest-${{ matrix.arch }}
+          path: reports/
+
+      - name: Login to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "${GHCR_TOKEN}" > "${RUNNER_TEMP}/ghcr-token"
+          scripts/retry.sh scripts/ghcr-login.sh "${{ github.actor }}" "${RUNNER_TEMP}/ghcr-token"
+          rm -f "${RUNNER_TEMP}/ghcr-token"
+
+      - name: Push the tested images as ${{ github.ref_name }}-${{ matrix.arch }}
+        run: make publish-arch ARCH=${{ matrix.arch }}
+
+  # Joins the per-architecture images into the multi-arch tag and publishes
+  # the release. Nothing is built here.
+  release:
+    name: Multi-arch manifest and release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: build
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Login to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "${GHCR_TOKEN}" > "${RUNNER_TEMP}/ghcr-token"
+          scripts/retry.sh scripts/ghcr-login.sh "${{ github.actor }}" "${RUNNER_TEMP}/ghcr-token"
+          rm -f "${RUNNER_TEMP}/ghcr-token"
+
+      - name: Create ${{ github.ref_name }} from the amd64 and arm64 images
+        run: make publish-manifest
+
+      - name: Digests and manifest.json
+        run: |
+          make -s digests | tee digests.txt
+          while read -r adapter digest; do
+            [[ "${digest}" == sha256:* ]] || { echo "::error::no digest for ${adapter}"; exit 1; }
+          done < digests.txt
+          jq -Rn --arg version "${VERSION}" --arg commit "${GITHUB_SHA}" \
+            --arg contract "$(sed -nE 's/^contract_version: "([^"]+)".*/\1/p' versions.yaml)" \
+            '{version: $version, commit: $commit, contract: $contract,
+              platforms: ["linux/amd64", "linux/arm64"],
+              images: ([inputs | split(" ") | {key: .[0], value: ("ghcr.io/otfabric/canopen-interop-" + .[0] + "@" + .[1])}] | from_entries)}' \
+            < digests.txt > manifest.json
+          cat manifest.json
+          sha256sum manifest.json > checksums.txt
+          {
+            scripts/release-notes.sh "${VERSION}"
+            echo
+            echo "## Images"
+            echo
+            echo "| Image | Digest |"
+            echo "|-------|--------|"
+            while read -r adapter digest; do
+              echo "| \`ghcr.io/otfabric/canopen-interop-${adapter}:${VERSION}\` | \`${digest}\` |"
+            done < digests.txt
+            echo
+            echo "\`manifest.json\` lists the images by digest for pinning. The images contain MIT, Apache-2.0 and LGPL-3.0 software and are for interoperability testing; see THIRD_PARTY_NOTICES.md."
+          } > notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: notes.md
+          files: |
+            manifest.json
+            checksums.txt

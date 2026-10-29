@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/otfabric/canopen-interop/schemas/result.schema.json",
+  "title": "canopen-interop result document",
+  "oneOf": [
+    {
+      "type": "object",
+      "title": "result of device",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "values"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "device"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "values": {
+          "type": "object",
+          "patternProperties": {
+            "^0x[0-9A-F]{4}:[0-9A-F]{2}$": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{2})*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of sdo-upload",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "index",
+        "subindex",
+        "block",
+        "size",
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "sdo-upload"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "index": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{4}$"
+        },
+        "subindex": {
+          "type": "integer"
+        },
+        "block": {
+          "type": "boolean"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2})*$"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of sdo-download",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "index",
+        "subindex",
+        "block",
+        "size"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "sdo-download"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "index": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{4}$"
+        },
+        "subindex": {
+          "type": "integer"
+        },
+        "block": {
+          "type": "boolean"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of nmt",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "command"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "nmt"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "command": {
+          "enum": [
+            "start",
+            "stop",
+            "pre-operational",
+            "reset-node",
+            "reset-communication"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of listen",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "received",
+        "complete"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "listen"
+        },
+        "received": {
+          "type": "integer"
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of pdo-receive",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "received",
+        "complete"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "pdo-receive"
+        },
+        "received": {
+          "type": "integer"
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of pdo-configure",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "tpdo",
+        "cobId",
+        "map",
+        "transmissionType",
+        "eventTimerMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "pdo-configure"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "tpdo": {
+          "type": "integer"
+        },
+        "cobId": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{3,8}$"
+        },
+        "map": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^0x[0-9A-F]{4}:[0-9A-F]{2}:[0-9]+$"
+          }
+        },
+        "transmissionType": {
+          "type": "integer"
+        },
+        "eventTimerMs": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of sync",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "sent",
+        "periodMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "sync"
+        },
+        "sent": {
+          "type": "integer"
+        },
+        "periodMs": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of eds-check",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "valid",
+        "errors",
+        "objects"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "eds-check"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "subindex",
+              "name",
+              "dataType",
+              "access",
+              "pdoMapping",
+              "default"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "type": "string",
+                "pattern": "^0x[0-9A-F]{4}$"
+              },
+              "subindex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dataType": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^0x[0-9A-F]{4}$"
+              },
+              "access": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "pdoMapping": {
+                "type": "boolean"
+              },
+              "default": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of cia402",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "op",
+        "state"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "cia402"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "op": {
+          "enum": [
+            "enable",
+            "disable",
+            "fault-reset"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

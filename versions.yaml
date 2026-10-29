@@ -1,0 +1,65 @@
+# Machine-readable version manifest for canopen-interop.
+# Upstream pins and base image digests are release inputs; nothing floats.
+# The Dockerfiles and adapters/*/requirements.txt are the source of truth for
+# a build: scripts/check-versions.sh fails when this file disagrees with them.
+
+interop_version: "0.1.0"
+contract_version: "1.0"          # docs/CONTAINER_CONTRACT.md; documents carry schemaVersion "1.0"
+fixture_schema: "1.0"            # fixtures/eds (CiA 306 EDS/DCF), docs/FIXTURES.md
+
+protocol:
+  name: "CANopen (CiA 301 SDO/NMT/heartbeat/EMCY/PDO/SYNC, CiA 306 EDS/DCF, CiA 402 drive state machine)"
+  transport: "Linux SocketCAN on vcan (host network namespace)"
+
+base_images:
+  python: "python:3.12-slim-bookworm@sha256:6dd8b6dab6b3adc7812bab69eca5dbdc1a5cc690ad28306d234ffb4ef8ac9753"
+  debian: "debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8"
+  dotnet-sdk: "mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da"
+
+implementations:
+  canopennode:
+    status: implemented
+    upstream: "CANopenNode/CANopenNode"
+    repository: "https://github.com/CANopenNode/CANopenNode"
+    version: "v4.1"                # latest release tag (2025-11-22)
+    revision: "ac2140717c3c498d9b0351bce052bab630a74764"
+    source_sha256: "c48bfb5a5205bf745d77b837be8d1c819cc8fe0e812b3b6fc1fda0b9641295f8"
+    canopenlinux_repository: "https://github.com/CANopenNode/CANopenLinux"
+    canopenlinux_revision: "f1348d4072cdabea4c3435a13c721ac29ab4cc91"   # master 2025-08-18; the only tag, v4.0, is from 2021
+    canopenlinux_sha256: "806b1b2e22561a537a1e40df16f1c0aae84d5e0c1128e93bfcde197774bcb640"
+    canopeneditor_repository: "https://github.com/CANopenNode/CANopenEditor"
+    canopeneditor_version: "v4.2.3"                                     # build tool only (EDS -> OD.c/OD.h)
+    canopeneditor_sha256: "37e5d635ddf11728fc993edbdc8c96583bae6c7e6f2589fa884f70681223e279"
+    license: "Apache-2.0"
+    language: "C"
+    stack: "CANopenNode v4.1 in CANopenLinux's canopend on SocketCAN; CiA 309-3 ASCII gateway for the master role"
+    roles: [device, sdo-upload, sdo-download, nmt, listen]
+    published: true
+    note: "The image ships the source tarballs and the generated OD.c/OD.h in /usr/share/src/canopennode."
+
+  lely:
+    status: implemented
+    upstream: "lely_industries/lely-core"
+    repository: "https://gitlab.com/lely_industries/lely-core"
+    version: "v2.3.5"              # latest release tag (2024-08-01)
+    revision: "9e3267d26018f6f6babd50786f6ae2af89cc57ea"
+    source_sha256: "38bd773ae92bb59087759696cede81ca825577fa3ee09c67ae126c0238ee1ce8"
+    license: "Apache-2.0"
+    language: "C/C++"
+    stack: "liblely-coapp/liblely-co on SocketCAN (io2) through adapters/lely/lely-coi.cpp; Python dcf-tools"
+    roles: [device, sdo-upload, sdo-download, nmt, listen, pdo-receive, eds-check]
+    published: true
+    note: "The image ships the source tarball in /usr/share/src/lely."
+
+  pythoncanopen:
+    status: implemented
+    upstream: "canopen"
+    repository: "https://github.com/christiansandberg/canopen"
+    package: "canopen"
+    version: "2.4.1"               # latest release (2025-08-05)
+    revision: "317fd3d61513b33ddb1aaf8a3ea2c23384a275ee"
+    license: "MIT"
+    language: "Python"
+    stack: "python canopen on python-can 4.6.1 (socketcan)"
+    roles: [device, sdo-upload, sdo-download, nmt, listen, pdo-configure, pdo-receive, sync, eds-check, cia402]
+    published: true

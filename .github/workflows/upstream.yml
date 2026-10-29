@@ -1,0 +1,56 @@
+name: Upstream
+run-name: "Upstream pin check (${{ github.event_name }})"
+
+# Compares the pins of versions.yaml with the latest upstream releases (PyPI,
+# GitHub, GitLab) and the base image tags with their current digests
+# (scripts/latest-upstream.py). When a pin is behind, the issue "Upstream
+# releases: pins behind the latest" is opened, or updated, with the table;
+# it is closed when every pin is current again. Pins are never changed here:
+# a bump is a reviewed change that rebuilds and self-tests the images.
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  BASE_REGISTRY: mirror.gcr.io/library
+  TITLE: "Upstream releases: pins behind the latest"
+
+jobs:
+  check:
+    name: Pins vs latest upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare
+        id: compare
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          scripts/latest-upstream.py --images --output table.md
+          cat table.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open, update or close the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEHIND: ${{ steps.compare.outputs.behind }}
+        run: |
+          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+            --jq "[.[] | select(.title == env.TITLE)][0].number // empty")
+          if [ "${BEHIND:-0}" -gt 0 ]; then
+            { cat table.md; echo; echo "Checked by the [Upstream workflow]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). Bump a pin in its Dockerfile or requirements and versions.yaml, then let CI build and self-test it."; } > body.md
+            if [ -n "$number" ]; then
+              gh issue edit "$number" --body-file body.md
+            else
+              gh issue create --title "$TITLE" --body-file body.md
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" --comment "Every pin is the latest upstream again."
+          fi
