@@ -54,6 +54,21 @@ CAPABILITIES = {
         "sync": False,
         "edsCheck": False,
         "cia402": False,
+        # contract 1.1
+        "lssMaster": True,             # gateway lss_switch_glob/_sel, lss_set_node, lss_store, lss_inquire_addr, lss_get_node
+        "lssBitTiming": True,          # lss_conf_bitrate, lss_activate_bitrate
+        "lssFastscan": True,           # _lss_fastscan
+        "lssAssignAll": True,          # lss_allnodes
+        "lssSlave": True,              # canopend-device -i 0xFF (CO_LSSslave)
+        "lssSlaveBitTiming": True,     # with the application's bit rate callbacks (app_interop.c)
+        "lssSlaveStore": True,         # CANopenLinux's LSScfgStoreCallback (RAM, for the run)
+        "rpdoSend": False,
+        "mpdoDam": False,
+        "mpdoSam": False,
+        "boot": False,
+        "cdcfDcfgen": False,
+        "cdcfObjects": False,
+        "syncWindowRpdo": False,       # CO_SYNC uses 0x1007 for TPDOs only (CO_CANclearPendingSyncPDOs)
     },
 }
 
@@ -127,16 +142,20 @@ class Gateway:
         return " | ".join(out[-5:])
 
     def command(self, text):
-        """Send one command; return the response after "[seq] "."""
+        """Send one command; return the response after "[seq] ". Comment
+        lines ("# ...") before it are kept in self.comments."""
         self.seq += 1
         self.sock.sendall(("[%d] %s\r\n" % (self.seq, text)).encode())
         prefix = "[%d]" % self.seq
+        self.comments = []
         while True:
             while b"\n" in self.buf:
                 line, self.buf = self.buf.split(b"\n", 1)
                 line = line.decode("utf-8", "replace").strip()
                 if line.startswith(prefix):
                     return line[len(prefix):].strip()
+                if line.startswith("#"):
+                    self.comments.append(line)
             remaining = self.deadline.remaining()
             if remaining <= 0:
                 raise coi.timeout("no gateway response to: %s" % text[:60])
@@ -228,6 +247,98 @@ def cmd_nmt(args, caps):
     coi.emit(coi.result("nmt", node=args.node_id, command=args.command))
 
 
+# ── master: LSS (CiA 305) through the gateway ───────────────────────────────
+
+RE_ADDR = re.compile(r"0x([0-9A-Fa-f]{8}) 0x([0-9A-Fa-f]{8}) 0x([0-9A-Fa-f]{8}) 0x([0-9A-Fa-f]{8})")
+RE_ASSIGNED = re.compile(r"# Node-ID (\d+) assigned to: " + RE_ADDR.pattern)
+INQUIRE_SUB = {"vendor-id": 0, "product-code": 1, "revision": 2, "serial": 3}
+
+
+def lss_command(gw, step, text):
+    """One LSS gateway command; the response or the contract's error."""
+    resp = gw.command(text)
+    m = re.match(r"ERROR:\s*(\d+)", resp)
+    if not m:
+        return resp
+    code = int(m.group(1))
+    if code == 103:
+        raise coi.lss_timeout(step, "LSS %s: no response (gateway %s)" % (step, resp))
+    if code in (501, 502, 503, 504):
+        # CANopenNode's LSS master reports the slave's error code only as
+        # "not supported" (1..254) or manufacturer-specific (255).
+        raise coi.protocol_error("LSS %s: the slave rejected the request (gateway %s)" % (step, resp), step=step)
+    raise coi.protocol_error("LSS %s: gateway %s" % (step, resp), step=step)
+
+
+def lss_ok(gw, step, text):
+    resp = lss_command(gw, step, text)
+    if resp != "OK":
+        raise coi.internal("unexpected gateway response to %s: %s" % (text, resp[:200]))
+
+
+def cmd_lss(args, caps):
+    """Every step is a command of CANopenNode's CiA 309-3 gateway (LSS master
+    CO_LSSmaster): lss_switch_glob, lss_switch_sel, lss_set_node,
+    lss_conf_bitrate, lss_activate_bitrate, lss_store, lss_inquire_addr,
+    lss_get_node, _lss_fastscan, lss_allnodes."""
+    def run(gw):
+        for name, arg in args.step:
+            if name == "switch-global":
+                lss_ok(gw, name, "lss_switch_glob %d" % (arg == "configuration"))
+                coi.emit(coi.lss_event(name, mode=arg))
+            elif name == "switch-selective":
+                lss_ok(gw, name, "lss_switch_sel 0x%08X 0x%08X 0x%08X 0x%08X" % arg)
+                coi.emit(coi.lss_event(name, address=coi.lss_address(*arg)))
+            elif name == "configure-node-id":
+                lss_ok(gw, name, "lss_set_node %d" % arg)
+                coi.emit(coi.lss_event(name, node=arg))
+            elif name == "configure-bit-timing":
+                lss_ok(gw, name, "lss_conf_bitrate 0 %d" % arg)
+                coi.emit(coi.lss_event(name, tableIndex=arg, kbps=coi.BIT_TIMING[arg]))
+            elif name == "activate-bit-timing":
+                lss_ok(gw, name, "lss_activate_bitrate %d" % arg)
+                coi.emit(coi.lss_event(name, delayMs=arg))
+            elif name == "store":
+                lss_ok(gw, name, "lss_store")
+                coi.emit(coi.lss_event(name))
+            elif name == "inquire":
+                if arg == "node-id":
+                    resp = lss_command(gw, name, "lss_get_node")
+                    m = re.fullmatch(r"0x([0-9A-Fa-f]{1,2})", resp)
+                    if not m:
+                        raise coi.internal("unexpected gateway response to lss_get_node: %s" % resp[:200])
+                    coi.emit(coi.lss_event(name, what=arg, node=int(m.group(1), 16)))
+                else:
+                    resp = lss_command(gw, name, "lss_inquire_addr %d" % INQUIRE_SUB[arg])
+                    m = re.fullmatch(r"0x([0-9A-Fa-f]{8})", resp)
+                    if not m:
+                        raise coi.internal("unexpected gateway response to lss_inquire_addr: %s" % resp[:200])
+                    coi.emit(coi.lss_event(name, what=arg, value="0x%08X" % int(m.group(1), 16)))
+            elif name == "fastscan":
+                resp = lss_command(gw, name, "_lss_fastscan %d" % LSS_SCAN_TIMEOUT_MS)
+                m = RE_ADDR.fullmatch(resp)
+                if not m:
+                    raise coi.internal("unexpected gateway response to _lss_fastscan: %s" % resp[:200])
+                coi.emit(coi.lss_event(name, address=coi.lss_address(*(int(g, 16) for g in m.groups()))))
+            elif name == "assign-all":
+                first, store = arg
+                lss_ok(gw, name, "lss_allnodes %d %d %d" % (LSS_SCAN_TIMEOUT_MS, first, int(store)))
+                assigned = []
+                for line in gw.comments:
+                    m = RE_ASSIGNED.match(line)
+                    if m:
+                        assigned.append({"node": int(m.group(1)),
+                                         "address": coi.lss_address(*(int(g, 16) for g in m.groups()[1:]))})
+                coi.emit(coi.lss_event(name, assigned=assigned, store=store))
+
+    with_gateway(args, run)
+    coi.emit(coi.result("lss", steps=len(args.step)))
+
+
+# Time the master waits for an LSS identify slave answer while scanning.
+LSS_SCAN_TIMEOUT_MS = 100
+
+
 def cmd_listen(args, caps):
     """canopend's heartbeat consumer (0x1016 sub 1, configured by a local SDO
     write) and EMCY consumer, as they report in canopend's log."""
@@ -286,6 +397,8 @@ def cmd_device(args, caps):
         env["COI_HEARTBEAT_MS"] = str(args.heartbeat_ms)
     if args.tick_ms is not None:
         env["COI_TICK_MS"] = str(args.tick_ms)
+    if args.serial is not None:
+        env["COI_SERIAL"] = "0x%08X" % args.serial
     if args.dump:
         env["COI_DUMP"] = ",".join("%04X:%02X" % k for k in args.dump)
     if args.emcy is not None:
@@ -308,6 +421,7 @@ def cmd_device(args, caps):
     stop = coi.Stop()
     deadline = coi.Deadline(args.timeout_ms)
     dumps, ready = {}, False
+    node_id = args.node_id
     while True:
         out = queue.Queue()
         proc = subprocess.Popen(["canopend-device", args.interface, "-i", str(args.node_id)],
@@ -328,7 +442,18 @@ def cmd_device(args, caps):
                 ended = True
             elif line == "COI READY" and not ready:
                 ready = True
-                coi.emit(coi.event("ready", node=args.node_id))
+                if args.node_id == coi.LSS_UNCONFIGURED:
+                    coi.emit(coi.event("ready"))
+                else:
+                    coi.emit(coi.event("ready", node=args.node_id))
+            elif line.startswith("COI NODEID "):
+                nid = int(line[11:])
+                if nid != node_id:  # an LSS-configured node-ID became active
+                    node_id = nid
+                    coi.emit(coi.event("node-id", node=nid))
+            elif line.startswith("COI BITRATE "):
+                kbps, delay = (int(x) for x in line[12:].split())
+                coi.emit(coi.event("bit-rate", kbps=kbps, delayMs=delay))
             elif line.startswith("COI DUMP "):
                 key, _, value = line[9:].partition(" ")
                 idx, sub = key.split(":")
@@ -339,10 +464,11 @@ def cmd_device(args, caps):
         if not ready:
             raise coi.interface_error("canopend-device ended (exit %d) before it booted" % code)
         if reset and not (stop.requested or deadline.expired()):
+            node_id = args.node_id  # the power-on node-ID (LSS configuration in RAM is lost)
             continue  # NMT reset node: the device's program restarts (power cycle)
         break
     values = {coi.hex_key(i, s): dumps.get(coi.hex_key(i, s)) for i, s in args.dump}
-    coi.emit(coi.result("device", node=args.node_id, values=values))
+    coi.emit(coi.result("device", node=args.node_id, values=values, nodeId=node_id))
 
 
 if __name__ == "__main__":
@@ -352,4 +478,5 @@ if __name__ == "__main__":
         "sdo-download": cmd_sdo_download,
         "nmt": cmd_nmt,
         "listen": cmd_listen,
+        "lss": cmd_lss,
     })

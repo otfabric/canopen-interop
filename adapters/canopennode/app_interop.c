@@ -13,11 +13,19 @@
  *   - reports one error condition with CO_errorReport() after
  *     COI_EMCY_AFTER_MS (COI_EMCY = "<code hex>:<errorBit hex>:<infoCode hex>"),
  *   - prints the values of COI_DUMP ("2000:00,2004:00", hex) as the Object
- *     Dictionary holds them when the program ends.
+ *     Dictionary holds them when the program ends,
+ *   - sets the serial number 0x1018:04 at power-on (COI_SERIAL), the LSS
+ *     address of the LSS slave (CiA 305),
+ *   - accepts every bit rate of the CiA 301 table for the LSS slave's
+ *     "configure bit timing" and reports "activate bit timing" (CANopenLinux
+ *     registers no such callbacks, so CANopenNode would ignore both; vcan has
+ *     no bit rate to switch).
  *
  * Lines for the adapter (adapter.py) on stdout: "COI READY" once the node
- * left the initialising state (boot-up sent), "COI DUMP <idx>:<sub> <hex>"
- * or "COI DUMP <idx>:<sub> ERR <ODR>", "COI END".
+ * left the initialising state (boot-up sent) or runs as an unconfigured LSS
+ * slave, "COI NODEID <id>" at every communication reset (255: unconfigured),
+ * "COI BITRATE <kbit/s> <delay ms>", "COI DUMP <idx>:<sub> <hex>" or
+ * "COI DUMP <idx>:<sub> ERR <ODR>", "COI END".
  */
 
 #include <stdio.h>
@@ -35,6 +43,7 @@ static uint16_t emcyCode;
 static uint8_t emcyBit;
 static uint32_t emcyInfo;
 static int ready;
+static uint16_t pendingKbps;
 
 /* DOMAIN 0x2005 */
 static uint8_t domainBuf[4096];
@@ -88,6 +97,13 @@ app_programStart(uint16_t* bitRate, uint8_t* nodeId, uint32_t* errInfo) {
     (void)nodeId;
     OD_entry_t* e;
 
+    if (getenv("COI_SERIAL") != NULL) {
+        e = OD_find(OD, 0x1018);
+        if (e == NULL || OD_set_u32(e, 4, (uint32_t)envul("COI_SERIAL", 0), true) != ODR_OK) {
+            *errInfo = 0x1018;
+            return CO_ERROR_OD_PARAMETERS;
+        }
+    }
     if (getenv("COI_HEARTBEAT_MS") != NULL) {
         e = OD_find(OD, 0x1017);
         if (e == NULL || OD_set_u16(e, 0, (uint16_t)envul("COI_HEARTBEAT_MS", 0), true) != ODR_OK) {
@@ -127,9 +143,29 @@ app_programStart(uint16_t* bitRate, uint8_t* nodeId, uint32_t* errInfo) {
     return CO_ERROR_NO;
 }
 
+/* LSS slave: every bit rate of the CiA 301 table is accepted (vcan). */
+static bool_t
+lssCheckBitRate(void* object, uint16_t bitRate) {
+    (void)object;
+    pendingKbps = bitRate;
+    return true;
+}
+
+static void
+lssActivateBitRate(void* object, uint16_t delay) {
+    (void)object;
+    printf("COI BITRATE %u %u\n", (unsigned)pendingKbps, (unsigned)delay);
+    fflush(stdout);
+}
+
 void
 app_communicationReset(CO_t* co) {
-    (void)co;
+    printf("COI NODEID %u\n", co->nodeIdUnconfigured ? 255U : (unsigned)co->NMT->nodeId);
+    fflush(stdout);
+    if (co->LSSslave != NULL) {
+        CO_LSSslave_initCkBitRateCall(co->LSSslave, NULL, lssCheckBitRate);
+        CO_LSSslave_initActBitRateCall(co->LSSslave, NULL, lssActivateBitRate);
+    }
 }
 
 void
@@ -175,7 +211,7 @@ app_programEnd(void) {
 
 void
 app_programAsync(CO_t* co, uint32_t timer1usDiff) {
-    if (!ready && CO_NMT_getInternalState(co->NMT) != CO_NMT_INITIALIZING) {
+    if (!ready && (co->nodeIdUnconfigured || CO_NMT_getInternalState(co->NMT) != CO_NMT_INITIALIZING)) {
         ready = 1;
         printf("COI READY\n");
         fflush(stdout);

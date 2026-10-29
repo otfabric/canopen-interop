@@ -30,7 +30,13 @@
           "pdo-receive",
           "sync",
           "eds-check",
-          "cia402"
+          "cia402",
+          "lss",
+          "rpdo-send",
+          "mpdo-send",
+          "mpdo-receive",
+          "boot",
+          "cdcf"
         ]
       },
       "uniqueItems": true
@@ -119,6 +125,48 @@
           "type": "boolean"
         },
         "cia402": {
+          "type": "boolean"
+        },
+        "lssMaster": {
+          "type": "boolean"
+        },
+        "lssBitTiming": {
+          "type": "boolean"
+        },
+        "lssFastscan": {
+          "type": "boolean"
+        },
+        "lssAssignAll": {
+          "type": "boolean"
+        },
+        "lssSlave": {
+          "type": "boolean"
+        },
+        "lssSlaveBitTiming": {
+          "type": "boolean"
+        },
+        "lssSlaveStore": {
+          "type": "boolean"
+        },
+        "rpdoSend": {
+          "type": "boolean"
+        },
+        "mpdoDam": {
+          "type": "boolean"
+        },
+        "mpdoSam": {
+          "type": "boolean"
+        },
+        "boot": {
+          "type": "boolean"
+        },
+        "cdcfDcfgen": {
+          "type": "boolean"
+        },
+        "cdcfObjects": {
+          "type": "boolean"
+        },
+        "syncWindowRpdo": {
           "type": "boolean"
         }
       }

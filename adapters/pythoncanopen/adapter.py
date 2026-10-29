@@ -18,6 +18,7 @@ import can
 import canopen
 from canopen import objectdictionary as odm
 from canopen.objectdictionary import datatypes
+from canopen import lss as lssmod
 from canopen.sdo import SdoAbortedError, SdoCommunicationError
 
 import coi
@@ -51,6 +52,21 @@ CAPABILITIES = {
         "sync": True,
         "edsCheck": True,
         "cia402": True,
+        # contract 1.1
+        "lssMaster": True,             # network.lss (LssMaster)
+        "lssBitTiming": True,
+        "lssFastscan": True,           # LssMaster.fast_scan
+        "lssAssignAll": False,
+        "lssSlave": False,             # no LSS slave in python canopen
+        "lssSlaveBitTiming": False,
+        "lssSlaveStore": False,
+        "rpdoSend": True,              # RemoteNode.rpdo[k].transmit(), SYNC producer
+        "mpdoDam": False,
+        "mpdoSam": False,
+        "boot": False,
+        "cdcfDcfgen": False,
+        "cdcfObjects": False,
+        "syncWindowRpdo": False,       # LocalNode has no RPDO consumer
     },
 }
 
@@ -216,19 +232,19 @@ def _bits_type(bits):
             64: datatypes.UNSIGNED64}.get(bits, datatypes.UNSIGNED64 if bits > 32 else datatypes.UNSIGNED32)
 
 
-def pdo_od(tpdo, mapped):
-    """A master-side object dictionary with the TPDO's communication and
-    mapping records and the mapped objects (the master is not given the
-    device's EDS: lengths come from the mapping)."""
+def pdo_od(tpdo, mapped, com_base=0x1800):
+    """A master-side object dictionary with the TPDO's (com_base 0x1400:
+    RPDO's) communication and mapping records and the mapped objects (the
+    master is not given the device's EDS: lengths come from the mapping)."""
     od = odm.ObjectDictionary()
-    com = odm.ODRecord("TPDO communication parameter", 0x1800 + tpdo - 1)
+    com = odm.ODRecord("PDO communication parameter", com_base + tpdo - 1)
     com.add_member(_var("Highest sub-index supported", com.index, 0, datatypes.UNSIGNED8, "ro"))
     for sub, dt, name in ((1, datatypes.UNSIGNED32, "COB-ID"), (2, datatypes.UNSIGNED8, "Transmission type"),
                           (3, datatypes.UNSIGNED16, "Inhibit time"), (5, datatypes.UNSIGNED16, "Event timer"),
                           (6, datatypes.UNSIGNED8, "SYNC start value")):
         com.add_member(_var(name, com.index, sub, dt))
     od.add_object(com)
-    mp = odm.ODRecord("TPDO mapping parameter", 0x1A00 + tpdo - 1)
+    mp = odm.ODRecord("PDO mapping parameter", com_base + 0x200 + tpdo - 1)
     mp.add_member(_var("Number of mapped objects", mp.index, 0, datatypes.UNSIGNED8))
     for sub in range(1, 9):
         mp.add_member(_var("Mapped object %d" % sub, mp.index, sub, datatypes.UNSIGNED32))
@@ -249,10 +265,10 @@ def pdo_od(tpdo, mapped):
     return od
 
 
-def read_mapping(network, args):
-    """The TPDO mapping of the remote node, read with the stack's SDO client."""
+def read_mapping(network, args, map_index=None):
+    """The TPDO (or other PDO) mapping of the remote node, read with the stack's SDO client."""
     probe = remote(network, args.node_id, timeout_ms=args.timeout_ms)
-    idx = 0x1A00 + args.tpdo - 1
+    idx = map_index or 0x1A00 + args.tpdo - 1
     count = sdo_errors(lambda: probe.sdo.upload(idx, 0))[0]
     out = []
     for sub in range(1, count + 1):
@@ -341,6 +357,107 @@ def cmd_sync(args, caps):
     coi.emit(coi.result("sync", sent=sent, periodMs=args.period_ms))
     if sent < args.count:
         raise coi.timeout("%d of %d SYNCs before the timeout" % (sent, args.count))
+
+
+# ── master: RPDO sender, LSS ────────────────────────────────────────────────
+
+def cmd_rpdo_send(args, caps):
+    """RPDO K of the node, as the stack reads it by SDO (COB-ID, mapping),
+    packed by python canopen with the --set values and sent once; with
+    --sync between two SYNCs of the stack's SYNC producer (the second one
+    makes a synchronous RPDO take effect), --delay-ms after the first."""
+    network = connect(args)
+    try:
+        mapped = read_mapping(network, args, 0x1600 + args.rpdo - 1)
+        keys = {(i, s) for i, s, _ in mapped}
+        given = {(i, s) for i, s, _ in args.set}
+        if keys != given:
+            raise coi.usage("--set must give every object RPDO %d maps: %s" % (
+                args.rpdo, ", ".join(coi.hex_key(i, s) for i, s in sorted(keys))))
+        node = remote(network, args.node_id, pdo_od(args.rpdo, mapped, 0x1400), args.timeout_ms)
+        pdo = node.rpdo[args.rpdo]
+        sdo_errors(lambda: pdo.read())
+        if not pdo.enabled:
+            raise coi.protocol_error("RPDO %d of node %d is not valid (COB-ID 0x%X)" % (
+                args.rpdo, args.node_id, pdo.cob_id))
+        for index, subindex, data in args.set:
+            var = next(v for v in pdo.map if v.index == index and v.subindex == subindex)
+            if len(data) * 8 != var.length:
+                raise coi.usage("%s: %d bytes for a %d-bit mapping" % (coi.hex_key(index, subindex), len(data),
+                                                                      var.length))
+            var.set_data(data)
+        if args.sync:
+            network.sync.transmit()
+            time.sleep(args.delay_ms / 1000.0)
+        pdo.transmit()
+        if args.sync:
+            time.sleep(0.02)
+            network.sync.transmit()
+        time.sleep(0.05)
+        cob_id = pdo.cob_id
+    finally:
+        network.disconnect()
+    coi.emit(coi.result("rpdo-send", node=args.node_id, rpdo=args.rpdo, cobId="0x%03X" % cob_id,
+                        values={coi.hex_key(i, s): d.hex() for i, s, d in args.set},
+                        sync=args.sync, delayMs=args.delay_ms))
+
+
+INQUIRE_CS = {"vendor-id": lssmod.CS_INQUIRE_VENDOR_ID, "product-code": lssmod.CS_INQUIRE_PRODUCT_CODE,
+              "revision": lssmod.CS_INQUIRE_REVISION_NUMBER, "serial": lssmod.CS_INQUIRE_SERIAL_NUMBER}
+
+
+def cmd_lss(args, caps):
+    """Every step is a call of python canopen's LssMaster (network.lss)."""
+    network = connect(args)
+    master = network.lss
+    # One LSS answer comes within milliseconds on vcan; fastscan waits this
+    # long for every bit no slave confirms.
+    master.RESPONSE_TIMEOUT = 0.3
+    try:
+        for name, arg in args.step:
+            try:
+                if name == "switch-global":
+                    master.send_switch_state_global(
+                        master.CONFIGURATION_STATE if arg == "configuration" else master.WAITING_STATE)
+                    coi.emit(coi.lss_event(name, mode=arg))
+                elif name == "switch-selective":
+                    if not master.send_switch_state_selective(*arg):
+                        raise coi.protocol_error("LSS switch-selective: unexpected response", step=name)
+                    coi.emit(coi.lss_event(name, address=coi.lss_address(*arg)))
+                elif name == "configure-node-id":
+                    master.configure_node_id(arg)
+                    coi.emit(coi.lss_event(name, node=arg))
+                elif name == "configure-bit-timing":
+                    master.configure_bit_timing(arg)
+                    coi.emit(coi.lss_event(name, tableIndex=arg, kbps=coi.BIT_TIMING[arg]))
+                elif name == "activate-bit-timing":
+                    master.activate_bit_timing(arg)
+                    coi.emit(coi.lss_event(name, delayMs=arg))
+                elif name == "store":
+                    master.store_configuration()
+                    coi.emit(coi.lss_event(name))
+                elif name == "inquire":
+                    if arg == "node-id":
+                        coi.emit(coi.lss_event(name, what=arg, node=master.inquire_node_id()))
+                    else:
+                        coi.emit(coi.lss_event(name, what=arg,
+                                               value="0x%08X" % master.inquire_lss_address(INQUIRE_CS[arg])))
+                elif name == "fastscan":
+                    found, address = master.fast_scan()
+                    if not found:
+                        raise coi.lss_timeout(name, "LSS fastscan: no unconfigured slave answered")
+                    coi.emit(coi.lss_event(name, address=coi.lss_address(*address)))
+            except lssmod.LssError as e:
+                text = str(e)
+                if text.startswith("LSS Error: "):
+                    raise coi.lss_error(name, int(text[11:]), "LSS %s: %s" % (name, text))
+                if "No LSS response" in text:
+                    raise coi.lss_timeout(name, "LSS %s: %s" % (name, text))
+                raise coi.protocol_error("LSS %s: %s" % (name, text), step=name)
+        time.sleep(0.05)  # let python-can hand the last frame to the kernel
+    finally:
+        network.disconnect()
+    coi.emit(coi.result("lss", steps=len(args.step)))
 
 
 # ── master: CiA 402 ─────────────────────────────────────────────────────────
@@ -450,13 +567,14 @@ def cmd_device(args, caps):
             booted[0] = True
 
     booted = [False]
-    pending = []
 
     def on_nmt(can_id, data, timestamp):
-        # Runs after NmtSlave.on_command (subscribed first) on the receive thread.
+        # Runs after NmtSlave.on_command (subscribed first) on the receive
+        # thread: the reset completes (boot-up sent) before the next NMT
+        # command is processed, so an NMT start right after a reset (CiA 302
+        # boot-up of a master) is not undone by a late boot.
         if len(data) >= 2 and data[1] in (0, args.node_id) and data[0] in (0x81, 0x82):
-            node.nmt.stop_heartbeat()
-            pending.append(data[0] == 0x81)
+            boot(reset_node=data[0] == 0x81)
 
     network.subscribe(0, on_nmt)
     try:
@@ -465,8 +583,6 @@ def cmd_device(args, caps):
         deadline = coi.Deadline(args.timeout_ms)
         emcy_at = time.monotonic() + args.emcy_after_ms / 1000.0 if args.emcy else None
         while not stop.requested and not deadline.expired():
-            if pending:
-                boot(reset_node=pending.pop(0))
             if emcy_at is not None and time.monotonic() >= emcy_at:
                 code, register, data = args.emcy
                 node.emcy.send(code, register, data)
@@ -481,7 +597,7 @@ def cmd_device(args, caps):
                 values[coi.hex_key(index, subindex)] = None
     finally:
         network.disconnect()
-    coi.emit(coi.result("device", node=args.node_id, values=values))
+    coi.emit(coi.result("device", node=args.node_id, values=values, nodeId=args.node_id))
 
 
 if __name__ == "__main__":
@@ -496,4 +612,6 @@ if __name__ == "__main__":
         "sync": cmd_sync,
         "eds-check": cmd_eds_check,
         "cia402": cmd_cia402,
+        "lss": cmd_lss,
+        "rpdo-send": cmd_rpdo_send,
     })

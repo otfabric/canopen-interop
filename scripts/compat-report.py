@@ -10,7 +10,10 @@ import sys
 MARK = {"pass": "✅", "fail": "❌", "skip": "–", "known": "⚠️"}
 TITLES = {"od": "Object Dictionary of the shared EDS (master → device)", "sdo": "SDO (master → device)",
           "nmt": "NMT and heartbeat (master → device)", "emcy": "EMCY (consumer ← producer)",
-          "pdo": "PDO and SYNC (master → device)", "eds": "EDS/DCF checkers"}
+          "pdo": "PDO and SYNC (master → device)", "eds": "EDS/DCF checkers",
+          "rpdo": "RPDO and SYNC window (sender → device)", "lss": "LSS (master → slave)",
+          "mpdo": "MPDO (producer → consumer)", "boot": "CiA 302 boot-up (master → device)",
+          "cdcf": "Concise DCF"}
 
 
 def main():

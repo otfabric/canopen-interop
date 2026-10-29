@@ -1,0 +1,4 @@
+# Lely's dcf-tools (dcfgen) at run time. Every package is pinned.
+PyYAML==6.0.3
+empy==3.3.4
+setuptools==80.9.0

@@ -25,9 +25,16 @@
           "const": "device"
         },
         "node": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 127
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 127
+            },
+            {
+              "const": 255
+            }
+          ]
         },
         "values": {
           "type": "object",
@@ -45,6 +52,11 @@
             }
           },
           "additionalProperties": false
+        },
+        "nodeId": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
         }
       }
     },
@@ -443,6 +455,253 @@
         },
         "state": {
           "type": "string"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of lss",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "lss"
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of rpdo-send",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "rpdo",
+        "cobId",
+        "values",
+        "sync",
+        "delayMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "rpdo-send"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "rpdo": {
+          "type": "integer"
+        },
+        "cobId": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{3,8}$"
+        },
+        "values": {
+          "type": "object",
+          "patternProperties": {
+            "^0x[0-9A-F]{4}:[0-9A-F]{2}$": {
+              "type": "string",
+              "pattern": "^([0-9a-f]{2})+$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "sync": {
+          "type": "boolean"
+        },
+        "delayMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of mpdo-send",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "node",
+        "mode",
+        "cobId",
+        "sent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "mpdo-send"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "mode": {
+          "enum": [
+            "dam",
+            "sam"
+          ]
+        },
+        "cobId": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{3}$"
+        },
+        "sent": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of mpdo-receive",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "received",
+        "complete"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "mpdo-receive"
+        },
+        "received": {
+          "type": "integer"
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of boot",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "booted",
+        "failed",
+        "missing"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "boot"
+        },
+        "booted": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          }
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "result of cdcf",
+      "required": [
+        "schemaVersion",
+        "type",
+        "operation",
+        "generator",
+        "node",
+        "size",
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "result"
+        },
+        "operation": {
+          "const": "cdcf"
+        },
+        "generator": {
+          "enum": [
+            "dcfgen",
+            "objects"
+          ]
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 4
+        },
+        "data": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2})*$"
         }
       }
     }

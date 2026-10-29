@@ -5,7 +5,9 @@
 #                BasicSlave (device), AsyncMaster with the coapp Sdo client
 #                (expedited, segmented, block), the NMT command request, the
 #                heartbeat and EMCY consumers and the Receive-PDO service.
-#   dcf          Lely's Python dcf-tools (the "dcfchk" checker) for eds-check.
+#   dcf          Lely's Python dcf-tools: the "dcfchk" checker for eds-check and
+#                "dcfgen" (master DCF and concise DCFs) for boot and cdcf, with
+#                PyYAML and empy (adapters/lely/requirements.txt).
 #
 # adapter.py only translates the container contract to lely-coi's command line
 # and its output to JSON.
@@ -32,7 +34,8 @@ RUN curl -fsSLo lely.tar.gz "https://gitlab.com/lely_industries/lely-core/-/arch
     && mkdir -p /out/src /out/licenses /out/dcf \
     && cp /src/lely.tar.gz "/out/src/lely-core-${LELY_VERSION}.tar.gz" \
     && cp LICENSE NOTICE /out/licenses/ \
-    && cp -a python/dcf-tools/dcf /out/dcf/dcf
+    && cp -a python/dcf-tools/dcf /out/dcf/dcf \
+    && cp -a python/dcf-tools/dcfgen /out/dcf/dcfgen
 COPY adapters/lely/lely-coi.cpp /src/lely-coi.cpp
 RUN mkdir -p /opt/lely/bin && g++ -std=c++14 -O2 -Wall -o /opt/lely/bin/lely-coi /src/lely-coi.cpp \
         $(PKG_CONFIG_PATH=/opt/lely/lib/pkgconfig pkg-config --cflags --libs liblely-coapp) \
@@ -47,6 +50,9 @@ ENV UPSTREAM_VERSION=v2.3.5 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/opt/canopen-interop:/opt/lely/dcf-tools \
     PATH=/opt/lely/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY adapters/lely/requirements.txt /opt/canopen-interop/requirements.txt
+RUN pip install --no-cache-dir --root-user-action=ignore --no-deps -r /opt/canopen-interop/requirements.txt \
+    && pip check
 COPY --from=build /opt/lely/lib/ /opt/lely/lib/
 COPY --from=build /opt/lely/bin/lely-coi /opt/lely/bin/lely-coi
 COPY --from=build /out/dcf/ /opt/lely/dcf-tools/
@@ -60,6 +66,7 @@ RUN rm -rf /opt/lely/lib/pkgconfig /opt/lely/lib/*.la \
     && printf '#!/bin/sh\nexec python3 /opt/canopen-interop/adapter.py "$@"\n' > /usr/local/bin/canopen-interop \
     && chmod 0755 /usr/local/bin/canopen-interop \
     && lely-coi 2>&1 | grep -q usage \
+    && python3 -W ignore -c 'import dcfgen.cli, em, yaml' \
     && useradd --system --no-create-home --uid 10001 canopen
 USER canopen
 WORKDIR /tmp
@@ -67,7 +74,7 @@ WORKDIR /tmp
 LABEL org.opencontainers.image.source="https://github.com/otfabric/canopen-interop" \
       org.opencontainers.image.description="canopen-interop adapter: Lely CANopen lely-core v2.3.5" \
       org.opencontainers.image.version="${ADAPTER_VERSION}" \
-      org.opencontainers.image.licenses="MIT AND Apache-2.0"
+      org.opencontainers.image.licenses="MIT AND Apache-2.0 AND LGPL-3.0-or-later"
 
 ENTRYPOINT ["canopen-interop"]
 CMD ["print-capabilities"]

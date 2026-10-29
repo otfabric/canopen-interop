@@ -114,6 +114,7 @@ def interop_objects():
                otype="0x8"),
         Obj(0x1005, "COB-ID SYNC message", var_=var("", U32, "rw", "0x00000080")),
         Obj(0x1006, "Communication cycle period", var_=var("", U32, "rw", "0")),
+        Obj(0x1007, "Synchronous window length", var_=var("", U32, "rw", "0")),
         Obj(0x1008, "Manufacturer device name", var_=var("", VSTR, "const", "otfabric canopen-interop device")),
         Obj(0x1014, "COB-ID EMCY", var_=var("", U32, "rw", "$NODEID+0x80")),
         Obj(0x1015, "Inhibit time EMCY", var_=var("", U16, "rw", "0")),
@@ -121,7 +122,7 @@ def interop_objects():
         record(0x1018, "Identity object", [
             (0, highest(4)),
             (1, var("Vendor-ID", U32, "ro", "0x00000000")),
-            (2, var("Product code", U32, "ro", "0x434F4931")),
+            (2, var("Product code", U32, "ro", PRODUCT_CODE)),
             (3, var("Revision number", U32, "ro", "0x00010000")),
             (4, var("Serial number", U32, "ro", "0x00000001")),
         ]),
@@ -156,6 +157,7 @@ def interop_objects():
 
 
 MANDATORY = (0x1000, 0x1001, 0x1018)
+PRODUCT_CODE = "0x434F4931"  # "COI1"
 
 
 def eds_text(objs, file_name, description, device=None, extra_sections=None, dcf=None):
@@ -181,7 +183,7 @@ def eds_text(objs, file_name, description, device=None, extra_sections=None, dcf
         "VendorName=otfabric (test fixture)",
         "VendorNumber=0x00000000",
         "ProductName=%s" % device.get("ProductName", "canopen-interop device"),
-        "ProductNumber=0x434F4931",
+        "ProductNumber=%s" % device.get("ProductNumber", PRODUCT_CODE),
         "RevisionNumber=0x00010000",
         "OrderCode=canopen-interop",
         "BaudRate_10=1",
@@ -200,7 +202,7 @@ def eds_text(objs, file_name, description, device=None, extra_sections=None, dcf
         "GroupMessaging=0",
         "NrOfRXPDO=%d" % device.get("NrOfRXPDO", 4),
         "NrOfTXPDO=%d" % device.get("NrOfTXPDO", 4),
-        "LSS_Supported=0",
+        "LSS_Supported=%d" % device.get("LSS_Supported", 0),
         "",
         "[DummyUsage]",
     ] + ["Dummy%04X=0" % i for i in range(1, 8)] + [""]
@@ -264,9 +266,35 @@ def dcf_objects():
     return objs
 
 
+def mpdo_objects():
+    """The interop device with an object scanner list (0x1FA0, SAM-MPDO
+    producer) and an object dispatching list (0x1FD0, SAM-MPDO consumer)."""
+    objs = interop_objects()
+    objs.append(record(0x1FA0, "Object scanner list", [(0, var("Number of entries", U8, "rw", "0"))] +
+                       [(i, var("Scan %d" % i, U32, "rw", "0x00000000")) for i in range(1, 5)], otype="0x8"))
+    objs.append(record(0x1FD0, "Object dispatching list", [(0, var("Number of entries", U8, "rw", "0"))] +
+                       [(i, var("Dispatch %d" % i, U64, "rw", "0x0000000000000000")) for i in range(1, 5)],
+                       otype="0x8"))
+    objs.sort(key=lambda o: o.index)
+    return objs
+
+
+def other_product_objects():
+    """The interop device with another product code (0x1018:02): a boot
+    whose expected identity (0x1F86) differs from the device's."""
+    objs = interop_objects()
+    for o in objs:
+        if o.index == 0x1018:
+            o.subs = [(n, dict(d, DefaultValue=OTHER_PRODUCT_CODE) if n == 2 else d) for n, d in o.subs]
+    return objs
+
+
+OTHER_PRODUCT_CODE = "0x434F4932"  # "COI2"
+LSS = {"LSS_Supported": 1}  # the test device is an LSS slave (CiA 305)
+
 FIXTURES = {
     "interop-device.eds": lambda: eds_text(interop_objects(), "interop-device.eds",
-                                           "canopen-interop shared test device"),
+                                           "canopen-interop shared test device", device=LSS),
     "compact-subobj.eds": lambda: eds_text(compact_objects()[0], "compact-subobj.eds",
                                            "CompactSubObj arrays (CiA 306 4.5.2.4)",
                                            extra_sections=compact_objects()[1]),
@@ -274,10 +302,17 @@ FIXTURES = {
                                          "ObjectLinks (CiA 306 4.6.2)",
                                          extra_sections=links_objects()[1]),
     "interop-device-node5.dcf": lambda: eds_text(dcf_objects(), "interop-device-node5.dcf",
-                                                 "The shared test device configured as node 5 (DCF)",
+                                                 "The shared test device configured as node 5 (DCF)", device=LSS,
                                                  dcf={"NodeID": "5", "NodeName": "interop-device", "Baudrate": "500",
                                                       "NetNumber": "1", "NetworkName": "canopen-interop",
                                                       "CANopenManager": "0", "LSS_SerialNumber": "1"}),
+    "mpdo-device.eds": lambda: eds_text(mpdo_objects(), "mpdo-device.eds",
+                                        "The shared test device with MPDO object scanner and dispatching lists",
+                                        device=dict(LSS, ProductName="canopen-interop MPDO device")),
+    "interop-device-other-product.eds": lambda: eds_text(other_product_objects(),
+                                                         "interop-device-other-product.eds",
+                                                         "The shared test device with product code 0x434F4932",
+                                                         device=dict(LSS, ProductNumber=OTHER_PRODUCT_CODE)),
     "invalid-missing-datatype.eds": lambda: eds_text(minimal_objects() + [Obj(0x2300, "Missing data type", var_={
         "ParameterName": "", "ObjectType": "0x7", "AccessType": "rw", "DefaultValue": "0", "PDOMapping": "0"})],
         "invalid-missing-datatype.eds", "Invalid: 0x2300 has no DataType"),

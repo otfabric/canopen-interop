@@ -33,6 +33,14 @@
     "abortCode": {
       "type": "string",
       "pattern": "^0x[0-9A-F]{8}$"
+    },
+    "step": {
+      "type": "string"
+    },
+    "lssError": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 255
     }
   }
 }
