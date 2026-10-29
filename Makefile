@@ -105,7 +105,7 @@ selftest: ## Reference-to-reference self-test of all suites on vcan (Linux; make
 	@DOCKER="$(DOCKER)" IMAGE_TEMPLATE='$(IMAGE_TEMPLATE)' ADAPTERS="$(ADAPTERS)" VCAN=$(VCAN) \
 		python3 scripts/selftest.py --reports reports
 
-selftest-%: FORCE ## One suite of the self-test: selftest-od, -sdo, -nmt, -emcy, -pdo, -eds (eds needs no CAN)
+selftest-%: FORCE ## One suite of the self-test: selftest-od, -sdo, -nmt, -emcy, -pdo, -eds, -rpdo, -lss, -mpdo, -boot, -cdcf (eds, cdcf need no CAN)
 	@DOCKER="$(DOCKER)" IMAGE_TEMPLATE='$(IMAGE_TEMPLATE)' ADAPTERS="$(ADAPTERS)" SUITES=$* VCAN=$(VCAN) \
 		python3 scripts/selftest.py --reports reports
 

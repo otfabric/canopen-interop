@@ -14,6 +14,11 @@
 #
 # adapter.py only translates the container contract to canopend's command
 # line, its ASCII gateway and the application's output.
+#
+# One upstream fix is applied to v4.1: CANopenNode commit cf85a4c (master,
+# 2026-05-31, PR #627, issue #623) enlarges the gateway's command token
+# buffer to 21 bytes; in v4.1 "lss_activate_bitrate" (20 characters) always
+# fails with a syntax error.
 # Build context: the repository root (make image-canopennode).
 
 ARG BASE_REGISTRY=docker.io/library
@@ -63,6 +68,8 @@ RUN curl -fsSLo node.tar.gz "https://github.com/CANopenNode/CANopenNode/archive/
     && tar xzf node.tar.gz && tar xzf linux.tar.gz \
     && mv "CANopenLinux-${CANOPENLINUX_REVISION}" master \
     && rmdir master/CANopenNode && cp -a "CANopenNode-${CANOPENNODE_VERSION#v}" master/CANopenNode \
+    && sed -i 's/^        char tok\[20\];$/        char tok[21];/' master/CANopenNode/309/CO_gateway_ascii.c \
+    && grep -q '^        char tok\[21\];$' master/CANopenNode/309/CO_gateway_ascii.c \
     && cp -a master device \
     && mkdir -p /out/bin /out/src /out/licenses \
     && cp node.tar.gz "/out/src/CANopenNode-${CANOPENNODE_VERSION}.tar.gz" \

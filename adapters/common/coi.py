@@ -27,10 +27,31 @@ EXIT_PROTOCOL = 5
 ALL_OPERATIONS = [
     "device", "sdo-upload", "sdo-download", "nmt", "listen",
     "pdo-configure", "pdo-receive", "sync", "eds-check", "cia402",
+    # contract 1.1
+    "lss", "rpdo-send", "mpdo-send", "mpdo-receive", "boot", "cdcf",
 ]
 
 # Operations that use a CAN interface.
-BUS_OPERATIONS = set(ALL_OPERATIONS) - {"eds-check"}
+BUS_OPERATIONS = set(ALL_OPERATIONS) - {"eds-check", "cdcf"}
+
+# Node-ID of an LSS slave whose node-ID is not configured (CiA 305).
+LSS_UNCONFIGURED = 0xFF
+
+# LSS steps (CiA 305) of the lss operation and the feature each one needs.
+LSS_STEPS = {
+    "switch-global": "lssMaster",
+    "switch-selective": "lssMaster",
+    "configure-node-id": "lssMaster",
+    "configure-bit-timing": "lssBitTiming",
+    "activate-bit-timing": "lssBitTiming",
+    "store": "lssMaster",
+    "inquire": "lssMaster",
+    "fastscan": "lssFastscan",
+    "assign-all": "lssAssignAll",
+}
+LSS_INQUIRE = ["vendor-id", "product-code", "revision", "serial", "node-id"]
+# CiA 301 bit timing table (index -> kbit/s); index 5 is reserved.
+BIT_TIMING = {0: 1000, 1: 800, 2: 500, 3: 250, 4: 125, 6: 50, 7: 20, 8: 10, 9: 0}
 
 NMT_COMMANDS = ["start", "stop", "pre-operational", "reset-node", "reset-communication"]
 NMT_STATES = ["initialising", "pre-operational", "operational", "stopped"]
@@ -82,11 +103,21 @@ def interface_error(message):
     return AdapterError(EXIT_ENV, "interface", message)
 
 
-def protocol_error(message, abort_code=None):
-    extra = {}
+def protocol_error(message, abort_code=None, **extra):
     if abort_code is not None:
         extra["abortCode"] = "0x%08X" % abort_code
     return AdapterError(EXIT_PROTOCOL, "protocol", message, **extra)
+
+
+def lss_error(step, code, message=""):
+    """An LSS slave answered a configure/store request with error code
+    `code` (CiA 305): exit 5 with lssError."""
+    return protocol_error(message or "LSS %s: error code %d" % (step, code), step=step, lssError=code)
+
+
+def lss_timeout(step, message=""):
+    """No LSS slave answered (exit 3)."""
+    return AdapterError(EXIT_TIMEOUT, "timeout", message or "LSS %s: no response" % step, step=step)
 
 
 def sdo_abort(abort_code, message=""):
@@ -137,6 +168,16 @@ def bootup_event(node):
 
 def heartbeat_event(node, state):
     return event("heartbeat", node=node, state=state)
+
+
+def lss_address(vendor_id, product_code, revision, serial):
+    return {"vendorId": "0x%08X" % vendor_id, "productCode": "0x%08X" % product_code,
+            "revision": "0x%08X" % revision, "serial": "0x%08X" % serial}
+
+
+def lss_event(step, **fields):
+    """One completed step of the lss operation."""
+    return event("lss", step=step, **fields)
 
 
 def emcy_event(node, code, register, data):
@@ -199,14 +240,133 @@ def parse_hex_data(text):
         raise argparse.ArgumentTypeError("data %r is not hex" % text)
 
 
-def parse_node(text, allow_zero=False):
+def parse_node(text, allow_zero=False, allow_unconfigured=False):
     try:
         v = int(text, 0)
     except (TypeError, ValueError):
         raise argparse.ArgumentTypeError("node-ID %r is not a number" % text)
+    if allow_unconfigured and v == LSS_UNCONFIGURED:
+        return v
     if not (0 if allow_zero else 1) <= v <= 127:
         raise argparse.ArgumentTypeError("node-ID %d out of range" % v)
     return v
+
+
+def parse_u32(text):
+    try:
+        v = int(text, 0)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("%r is not a number" % text)
+    if not 0 <= v <= 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("%r is not a 32-bit value" % text)
+    return v
+
+
+def parse_cob_id(text):
+    v = parse_u32(text)
+    if not 1 <= v <= 0x7FF:
+        raise argparse.ArgumentTypeError("COB-ID %r: an 11-bit CAN-ID 0x001..0x7FF" % text)
+    return v
+
+
+def parse_lss_step(text):
+    """An lss step: NAME[:ARG...] (docs/CONTAINER_CONTRACT.md#lss)."""
+    name, _, rest = text.partition(":")
+    args = rest.split(":") if rest else []
+    if name not in LSS_STEPS:
+        raise argparse.ArgumentTypeError("unknown LSS step %r (%s)" % (name, ", ".join(LSS_STEPS)))
+    try:
+        if name == "switch-global":
+            if args not in (["waiting"], ["configuration"]):
+                raise ValueError("switch-global:waiting|configuration")
+            return name, args[0]
+        if name == "switch-selective":
+            if len(args) != 4:
+                raise ValueError("switch-selective:VENDOR:PRODUCT:REVISION:SERIAL")
+            return name, tuple(parse_u32(a) for a in args)
+        if name == "configure-node-id":
+            if len(args) != 1:
+                raise ValueError("configure-node-id:N")
+            v = int(args[0], 0)
+            if not (1 <= v <= 127 or v == LSS_UNCONFIGURED):
+                raise ValueError("node-ID 1..127 or 255")
+            return name, v
+        if name == "configure-bit-timing":
+            if len(args) != 1 or int(args[0], 0) not in BIT_TIMING:
+                raise ValueError("configure-bit-timing:INDEX (CiA 301 table: 0-4, 6-9)")
+            return name, int(args[0], 0)
+        if name == "activate-bit-timing":
+            if len(args) != 1 or not 0 <= int(args[0], 0) <= 0xFFFF:
+                raise ValueError("activate-bit-timing:DELAY_MS (0..65535)")
+            return name, int(args[0], 0)
+        if name == "inquire":
+            if len(args) != 1 or args[0] not in LSS_INQUIRE:
+                raise ValueError("inquire:" + "|".join(LSS_INQUIRE))
+            return name, args[0]
+        if name == "assign-all":
+            if not 1 <= len(args) <= 2 or (len(args) == 2 and args[1] != "store"):
+                raise ValueError("assign-all:FIRST_NODE_ID[:store]")
+            v = int(args[0], 0)
+            if not 1 <= v <= 127:
+                raise ValueError("node-ID 1..127")
+            return name, (v, len(args) == 2)
+        if args:
+            raise ValueError("%s takes no argument" % name)
+        return name, None
+    except (ValueError, argparse.ArgumentTypeError) as e:
+        raise argparse.ArgumentTypeError("LSS step %r: %s" % (text, e))
+
+
+def parse_set(text):
+    """IDX:SUB=HEX (rpdo-send --set)."""
+    m = re.fullmatch(r"(?:0x)?([0-9A-Fa-f]{1,4}):(?:0x)?([0-9A-Fa-f]{1,2})=([0-9A-Fa-f]*)", text)
+    if not m or len(m.group(3)) % 2 or not m.group(3):
+        raise argparse.ArgumentTypeError("%r: want IDX:SUB=HEX, e.g. 0x2001:00=efbe" % text)
+    return int(m.group(1), 16), int(m.group(2), 16), bytes.fromhex(m.group(3))
+
+
+def parse_node_value(text):
+    """N:IDX:SUB=VALUE (boot --sdo, VALUE an integer) or IDX:SUB=VALUE (cdcf --sdo)."""
+    m = re.fullmatch(r"(?:(\d+):)?(?:0x)?([0-9A-Fa-f]{1,4}):(?:0x)?([0-9A-Fa-f]{1,2})=(-?(?:0x[0-9A-Fa-f]+|\d+))", text)
+    if not m:
+        raise argparse.ArgumentTypeError("%r: want [NODE:]IDX:SUB=VALUE, e.g. 5:0x2001:00=0x4455" % text)
+    node = int(m.group(1)) if m.group(1) else None
+    if node is not None and not 1 <= node <= 127:
+        raise argparse.ArgumentTypeError("%r: node-ID 1..127" % text)
+    return node, int(m.group(2), 16), int(m.group(3), 16), int(m.group(4), 0)
+
+
+def parse_slave(text):
+    """N:PATH[:mandatory] (boot --slave)."""
+    parts = text.split(":")
+    mandatory = len(parts) > 2 and parts[-1] == "mandatory"
+    if mandatory:
+        parts = parts[:-1]
+    if len(parts) != 2 or not parts[1]:
+        raise argparse.ArgumentTypeError("%r: want NODE:DCF_PATH[:mandatory]" % text)
+    try:
+        node = int(parts[0], 0)
+    except ValueError:
+        node = 0
+    if not 1 <= node <= 127:
+        raise argparse.ArgumentTypeError("%r: node-ID 1..127" % text)
+    return node, parts[1], mandatory
+
+
+def parse_dispatch(text):
+    """PRODUCER:RIDX:RSUB:LIDX:LSUB (mpdo-receive --dispatch)."""
+    m = re.fullmatch(r"(\d+):(?:0x)?([0-9A-Fa-f]{1,4}):(?:0x)?([0-9A-Fa-f]{1,2}):"
+                     r"(?:0x)?([0-9A-Fa-f]{1,4}):(?:0x)?([0-9A-Fa-f]{1,2})", text)
+    if not m or not 1 <= int(m.group(1)) <= 127:
+        raise argparse.ArgumentTypeError("%r: want PRODUCER:RIDX:RSUB:LIDX:LSUB, e.g. 7:0x2001:00:0x2001:00" % text)
+    return (int(m.group(1)), int(m.group(2), 16), int(m.group(3), 16), int(m.group(4), 16), int(m.group(5), 16))
+
+
+def parse_range(text):
+    m = re.fullmatch(r"(?:0x)?([0-9A-Fa-f]{1,4})-(?:0x)?([0-9A-Fa-f]{1,4})", text)
+    if not m or int(m.group(1), 16) > int(m.group(2), 16):
+        raise argparse.ArgumentTypeError("%r: want MIN-MAX in hex, e.g. 0x1000-0x1FFF" % text)
+    return int(m.group(1), 16), int(m.group(2), 16)
 
 
 def parse_key(text):
@@ -263,8 +423,9 @@ def build_parser(adapter):
 
     d = sub.add_parser("device")
     common(d)
-    d.add_argument("--node-id", type=parse_node, required=True)
+    d.add_argument("--node-id", type=lambda t: parse_node(t, allow_unconfigured=True), required=True)
     d.add_argument("--eds", required=True)
+    d.add_argument("--serial", type=parse_u32)
     d.add_argument("--heartbeat-ms", type=int)
     d.add_argument("--dump", type=parse_key, action="append", default=[])
     d.add_argument("--tick-ms", type=int)
@@ -317,6 +478,53 @@ def build_parser(adapter):
     common(c4)
     c4.add_argument("--node-id", type=parse_node, required=True)
     c4.add_argument("--op", choices=["enable", "disable", "fault-reset"], required=True)
+
+    # ── contract 1.1 ──
+    ls = sub.add_parser("lss")
+    common(ls)
+    ls.add_argument("--step", type=parse_lss_step, action="append", required=True)
+
+    rs = sub.add_parser("rpdo-send")
+    common(rs)
+    rs.add_argument("--node-id", type=parse_node, required=True)
+    rs.add_argument("--rpdo", type=int, required=True)
+    rs.add_argument("--set", type=parse_set, action="append", required=True)
+    rs.add_argument("--sync", action="store_true")
+    rs.add_argument("--delay-ms", type=int, default=0)
+
+    ms = sub.add_parser("mpdo-send")
+    common(ms)
+    ms.add_argument("--node-id", type=parse_node, required=True)
+    ms.add_argument("--mode", choices=["dam", "sam"], required=True)
+    ms.add_argument("--cob-id", type=parse_cob_id, required=True)
+    ms.add_argument("--index", type=parse_index, required=True)
+    ms.add_argument("--subindex", type=parse_subindex, default=0)
+    ms.add_argument("--data", type=parse_hex_data, required=True)
+    ms.add_argument("--target", type=lambda t: parse_node(t, allow_zero=True), default=0)
+    ms.add_argument("--count", type=int, default=1)
+    ms.add_argument("--period-ms", type=int, default=100)
+
+    mr = sub.add_parser("mpdo-receive")
+    common(mr)
+    mr.add_argument("--node-id", type=parse_node, required=True)
+    mr.add_argument("--mode", choices=["dam", "sam"], required=True)
+    mr.add_argument("--cob-id", type=parse_cob_id, required=True)
+    mr.add_argument("--count", type=int, default=1)
+    mr.add_argument("--dispatch", type=parse_dispatch, action="append", default=[])
+
+    bt = sub.add_parser("boot")
+    common(bt)
+    bt.add_argument("--slave", type=parse_slave, action="append", required=True)
+    bt.add_argument("--sdo", type=parse_node_value, action="append", default=[])
+    bt.add_argument("--no-start", action="store_true")
+
+    cd = sub.add_parser("cdcf")
+    cd.add_argument("--dcf", required=True)
+    cd.add_argument("--node-id", type=parse_node, required=True)
+    cd.add_argument("--generator", choices=["dcfgen", "objects"], default="dcfgen")
+    cd.add_argument("--sdo", type=parse_node_value, action="append", default=[])
+    cd.add_argument("--range", type=parse_range, default=(0x1000, 0x9FFF))
+    cd.add_argument("--output")
     return p
 
 
@@ -364,6 +572,62 @@ def check_args(cmd, args, caps):
         raise usage("--period-ms must be positive")
     if cmd == "eds-check" and not os.path.isfile(args.eds):
         raise usage("no EDS file %s" % args.eds)
+    check_args_1_1(cmd, args, f)
+
+
+def check_args_1_1(cmd, args, f):
+    """Checks of the contract 1.1 operations and flags."""
+    if cmd == "device":
+        if (args.node_id == LSS_UNCONFIGURED or args.serial is not None) and not f.get("lssSlave"):
+            raise unsupported("LSS slave (--node-id 255, --serial)")
+    if cmd == "lss":
+        for name, _ in args.step:
+            if not f.get(LSS_STEPS[name]):
+                raise unsupported("LSS step %s (feature %s)" % (name, LSS_STEPS[name]))
+    if cmd == "rpdo-send":
+        if not 1 <= args.rpdo <= 512:
+            raise usage("--rpdo is 1..512")
+        if not 0 <= args.delay_ms <= 60000:
+            raise usage("--delay-ms is 0..60000")
+        if args.delay_ms and not args.sync:
+            raise usage("--delay-ms needs --sync")
+    if cmd in ("mpdo-send", "mpdo-receive"):
+        if not f.get("mpdoDam" if args.mode == "dam" else "mpdoSam"):
+            raise unsupported("%s-MPDO (feature %s)" % (args.mode.upper(),
+                                                         "mpdoDam" if args.mode == "dam" else "mpdoSam"))
+        if args.count < 1:
+            raise usage("--count must be at least 1")
+    if cmd == "mpdo-send":
+        if not 1 <= len(args.data) <= 4:
+            raise usage("an MPDO carries 1..4 data bytes")
+        if args.period_ms <= 0:
+            raise usage("--period-ms must be positive")
+        if args.mode == "sam" and args.target:
+            raise usage("--target is for DAM-MPDOs")
+    if cmd == "mpdo-receive":
+        if args.dispatch and args.mode != "sam":
+            raise usage("--dispatch is for SAM-MPDOs")
+        if args.mode == "sam" and not args.dispatch:
+            raise usage("a SAM-MPDO consumer needs --dispatch entries")
+    if cmd == "boot":
+        nodes = [n for n, _, _ in args.slave]
+        if len(set(nodes)) != len(nodes):
+            raise usage("--slave: a node-ID twice")
+        for n, path, _ in args.slave:
+            if not os.path.isfile(path):
+                raise usage("no DCF file %s" % path)
+        for n, _, _, _ in args.sdo:
+            if n not in nodes:
+                raise usage("--sdo for node %s, which is not a --slave" % n)
+    if cmd == "cdcf":
+        if not os.path.isfile(args.dcf):
+            raise usage("no DCF file %s" % args.dcf)
+        if not f.get("cdcfDcfgen" if args.generator == "dcfgen" else "cdcfObjects"):
+            raise unsupported("cdcf --generator %s" % args.generator)
+        if any(n is not None for n, _, _, _ in args.sdo):
+            raise usage("cdcf --sdo takes IDX:SUB=VALUE (the node is --node-id)")
+        if args.generator == "objects" and args.sdo:
+            raise usage("--sdo is for --generator dcfgen")
 
 
 class Deadline:

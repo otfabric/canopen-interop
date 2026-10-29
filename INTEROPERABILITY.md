@@ -6,7 +6,7 @@
 2. Start a reference device, with the values to check at the end:
 
    ```sh
-   docker run --rm --network host --name dev ghcr.io/otfabric/canopen-interop-lely:v0.1.0 \
+   docker run --rm --network host --name dev ghcr.io/otfabric/canopen-interop-lely:v0.2.0 \
        device --interface vcan0 --node-id 5 --eds /fixtures/eds/interop-device.eds \
        --heartbeat-ms 100 --tick-ms 50 --dump 0x2000:00 --dump 0x2005:00 --timeout-ms 60000
    ```
@@ -28,6 +28,27 @@ and drive it with the master images: `sdo-upload`/`sdo-download` (add
 `pdo-receive`, `sync`, `pdo-configure`. Every operation reports what the
 upstream stack did, with exit codes for timeouts (3) and SDO aborts (5, with
 `abortCode`).
+
+## Testing LSS, MPDO, boot-up and concise DCFs (contract 1.1)
+
+* **LSS master under test**: start `device --node-id 255 --serial N` of
+  `canopennode` or `lely` (an unconfigured LSS slave), run the master, and
+  read the device's `node-id` and `bit-rate` events; the result's `nodeId`
+  is the node-ID it ended with.
+* **LSS slave under test**: `lss --step ...` of each master image, e.g.
+  `--step switch-global:configuration --step inquire:serial --step
+  switch-global:waiting`, or `--step fastscan --step configure-node-id:40
+  --step store --step switch-global:waiting`.
+* **MPDO**: `mpdo-receive` (lely) as consumer of the implementation's DAM or
+  SAM-MPDOs, `mpdo-send` (lely) as producer for the implementation's
+  consumer.
+* **NMT master boot-up**: `boot` (lely) boots devices of the implementation
+  with concise DCFs; reference devices boot under the implementation's
+  master.
+* **Concise DCF encoder**: `cdcf --generator dcfgen|objects` gives lely's
+  concise DCF of a DCF for a byte-for-byte comparison.
+* **SYNC window**: `rpdo-send --sync --delay-ms D` (pythoncanopen) sends a
+  synchronous RPDO D ms after a SYNC; set 0x1007 by SDO first.
 
 ## Pinning
 

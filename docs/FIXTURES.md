@@ -21,6 +21,7 @@ object dictionary from it with CANopenEditor.
 | 0x1003 | Pre-defined error field (ARRAY, 8) | UNSIGNED32 | sub0 rw, ro | 0 |
 | 0x1005 | COB-ID SYNC | UNSIGNED32 | rw | 0x00000080 |
 | 0x1006 | Communication cycle period | UNSIGNED32 | rw | 0 |
+| 0x1007 | Synchronous window length (µs; 1.1) | UNSIGNED32 | rw | 0 |
 | 0x1008 | Manufacturer device name | VISIBLE_STRING | const | `otfabric canopen-interop device` (31 bytes) |
 | 0x1014 | COB-ID EMCY | UNSIGNED32 | rw | $NODEID+0x80 |
 | 0x1015 | Inhibit time EMCY | UNSIGNED16 | rw | 0 |
@@ -58,6 +59,30 @@ Design notes:
 * **0x200A** exercises range aborts (0x06090031/0x06090032); only lely checks
   limits (`deviceLimits`).
 * The device boots into pre-operational and waits for NMT start.
+* **LSS (1.1)**: `[DeviceInfo] LSS_Supported=1` (lely creates its LSS slave
+  only then); the LSS address is 0x1018: vendor-ID 0, product code
+  0x434F4931 ("COI1"), revision 0x00010000 and the serial number, 1 or
+  `device --serial`.
+* **0x1007 (1.1)** lets the rpdo suite set a SYNC window by SDO.
+
+Fixture schema 1.1 (canopen-interop v0.2.0) added 0x1007 and
+`LSS_Supported=1` to the shared device and its DCF, and the two fixtures
+below; nothing was removed or renumbered.
+
+## `fixtures/eds/mpdo-device.eds` (1.1)
+
+The shared device plus an object scanner list 0x1FA0 (ARRAY of 4
+UNSIGNED32, SAM-MPDO producer) and an object dispatching list 0x1FD0
+(ARRAY of 4 UNSIGNED64, SAM-MPDO consumer), all 0. `mpdo-send` and
+`mpdo-receive` (lely) run it with TPDO 1 / RPDO 1 configured as the MPDO
+and the lists filled from the flags.
+
+## `fixtures/eds/interop-device-other-product.eds` (1.1)
+
+The shared device with product code 0x434F4932 ("COI2", 0x1018:02 and
+`ProductNumber`): `boot --slave N:/fixtures/eds/interop-device-other-product.eds`
+expects that product code (0x1F86) of a device that has 0x434F4931, so the
+'boot slave' process ends with error status M.
 
 ## Other EDS/DCF fixtures (eds-check)
 

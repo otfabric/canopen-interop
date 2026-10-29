@@ -5,7 +5,7 @@
 # every image: print-capabilities and print-version documents, print-fixture,
 # exit 2 with an error document for an unsupported operation (when the image
 # has one) and for a usage error, exit 4 for a missing interface, eds-check of
-# the shared EDS (when supported). Documents go to $REPORTS/smoke (validate
+# the shared EDS and a concise DCF (when supported). Documents go to $REPORTS/smoke (validate
 # with validate-documents.py).
 #
 # Environment: DOCKER (default docker), IMAGE_TEMPLATE (as selftest.py),
@@ -33,7 +33,8 @@ for a in "$@"; do
         echo "FAIL $a: print-fixture differs from fixtures/eds/interop-device.eds"; fail=1
     fi
     ops=$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["operations"]))' "$OUT/$a.capabilities.json")
-    for op in device sdo-upload sdo-download nmt listen pdo-configure pdo-receive sync eds-check cia402; do
+    for op in device sdo-upload sdo-download nmt listen pdo-configure pdo-receive sync eds-check cia402 \
+              lss rpdo-send mpdo-send mpdo-receive boot cdcf; do
         [[ " $ops " == *" $op "* ]] && continue
         set +e; run "$op" > "$OUT/$a.unsupported.jsonl" 2>/dev/null; code=$?; set -e
         expect 2 unsupported "$OUT/$a.unsupported.jsonl" "unsupported operation $op"
@@ -47,6 +48,14 @@ for a in "$@"; do
         set +e; run eds-check --eds /fixtures/eds/interop-device.eds > "$OUT/$a.eds-check.jsonl" 2>/dev/null; code=$?; set -e
         if [[ $code -ne 0 ]] || ! grep -q '"valid":true' "$OUT/$a.eds-check.jsonl"; then
             echo "FAIL $a: eds-check of the shared EDS (exit $code)"; fail=1
+        fi
+    fi
+    if [[ " $ops " == *" cdcf "* ]]; then
+        set +e; run cdcf --dcf /fixtures/eds/interop-device-node5.dcf --node-id 5 --generator objects \
+            --range 0x1017-0x1017 > "$OUT/$a.cdcf.jsonl" 2>/dev/null; code=$?; set -e
+        # one entry: 0x1017:00, 2 bytes, 1000 (the DCF's ParameterValue)
+        if [[ $code -ne 0 ]] || ! grep -q '"data":"0100000017100002000000e803"' "$OUT/$a.cdcf.jsonl"; then
+            echo "FAIL $a: cdcf of 0x1017 of interop-device-node5.dcf (exit $code)"; fail=1
         fi
     fi
     echo "ok   $a: $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["upstream"], d["version"])' "$OUT/$a.version.json") [$ops]"

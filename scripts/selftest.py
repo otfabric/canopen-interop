@@ -20,6 +20,18 @@ interface and checks the documents of docs/CONTAINER_CONTRACT.md:
           pdo-configure, a synchronous TPDO driven by each SYNC producer
   eds     eds-check of every EDS/DCF fixture by every checker, and the
           normalized object lists of the checkers compared
+  rpdo    (contract 1.1) every RPDO sender x every device with RPDOs: an
+          event-driven RPDO, synchronous RPDOs inside and after the SYNC
+          window (0x1007)
+  lss     (1.1) every LSS master x every LSS slave: inquire, switch
+          selective + configure node-ID + store, bit timing, fastscan,
+          fastscan with only configured slaves, assign-all
+  mpdo    (1.1) every MPDO producer x every MPDO consumer: DAM (unicast,
+          other node, broadcast) and SAM with an object dispatching list
+  boot    (1.1) every CiA 302 boot master x a network of every device:
+          concise DCF configuration, identity mismatch, missing slave
+  cdcf    (1.1) concise DCFs of every generator compared with the encoding
+          CiA 302-3 gives for the fixture values
 
 Selection is capability driven: a pair or scenario an adapter cannot do is
 recorded as "skip" with the reason, never as "pass". A failure listed in
@@ -32,7 +44,8 @@ Environment:
   IMAGE_TEMPLATE    image name with {adapter} (default
                     "ghcr.io/otfabric/canopen-interop-{adapter}:dev")
   ADAPTERS          space-separated subset (default: all)
-  SUITES            space-separated subset of od sdo nmt emcy pdo eds (default: all)
+  SUITES            space-separated subset of od sdo nmt emcy pdo eds rpdo lss mpdo
+                    boot cdcf (default: all)
   VCAN              interface (default vcan0)
   REPORTS           report directory (default ./reports)
   WORK              scratch directory shared with the containers (default
@@ -55,7 +68,7 @@ import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALL_ADAPTERS = ["canopennode", "lely", "pythoncanopen"]
-ALL_SUITES = ["od", "sdo", "nmt", "emcy", "pdo", "eds"]
+ALL_SUITES = ["od", "sdo", "nmt", "emcy", "pdo", "eds", "rpdo", "lss", "mpdo", "boot", "cdcf"]
 
 DOCKER = shlex.split(os.environ.get("DOCKER", "docker"))
 TEMPLATE = os.environ.get("IMAGE_TEMPLATE", "ghcr.io/otfabric/canopen-interop-{adapter}:dev")
@@ -261,8 +274,8 @@ def helper(caps, op, feature=None):
     return None
 
 
-def start_device(adapter, extra=(), timeout_ms=600000):
-    dev = Background(adapter, ["device", "--interface", VCAN, "--node-id", NODE, "--eds", EDS,
+def start_device(adapter, extra=(), timeout_ms=600000, node=NODE, eds=EDS):
+    dev = Background(adapter, ["device", "--interface", VCAN, "--node-id", node, "--eds", eds,
                                "--timeout-ms", timeout_ms] + list(extra))
     if not dev.wait_ready(30):
         dev.stop()
@@ -720,6 +733,482 @@ def suite_eds(caps):
                        else "%d sub-objects agree" % len(keys), a, b)
 
 
+# ── contract 1.1: rpdo ──────────────────────────────────────────────────────
+
+def sdo_value(caps, index, sub=0, node=NODE):
+    code, docs, _ = run(helper(caps, "sdo-upload"), ["sdo-upload", "--interface", VCAN, "--node-id", node,
+                                                     "--index", "0x%04X" % index, "--subindex", sub])
+    return result_of(docs).get("data") if code == 0 else None
+
+
+def sdo_write(caps, index, sub, data, node=NODE):
+    code, docs, _ = run(helper(caps, "sdo-download"), ["sdo-download", "--interface", VCAN, "--node-id", node,
+                                                       "--index", "0x%04X" % index, "--subindex", sub, "--data", data])
+    return code == 0
+
+
+def nmt(caps, command, node=NODE):
+    code, _, _ = run(helper(caps, "nmt"), ["nmt", "--interface", VCAN, "--node-id", node, "--command", command])
+    return code == 0
+
+
+def suite_rpdo(caps):
+    """RPDO 1 of the test device maps 0x2001:00 (16 bits) and 0x2003:00 (32
+    bits). Every sender's RPDO is checked by reading the objects back."""
+    senders = [a for a in caps if can(caps, a, "rpdo-send", "rpdoSend")]
+    devices = [a for a in caps if can(caps, a, "device") and caps[a]["features"].get("deviceRpdo")]
+    for a in caps:
+        if can(caps, a, "device") and a not in devices:
+            record("rpdo", "rpdo", "skip", "device has no RPDO consumer (deviceRpdo)", "", a)
+        if a not in senders:
+            record("rpdo", "rpdo-send", "skip", "adapter cannot send RPDOs (rpdo-send)", a, "")
+    base = ["--interface", VCAN, "--node-id", NODE, "--rpdo", 1]
+
+    def send(m, v1, v3, sync=False, delay=0):
+        extra = ["--sync", "--delay-ms", delay] if sync else []
+        code, docs, _ = run(m, ["rpdo-send"] + base + ["--set", "0x2001:00=" + v1, "--set", "0x2003:00=" + v3]
+                            + extra)
+        return code, result_of(docs)
+
+    for m in senders:
+        for d in devices:
+            dev, bg = start_device(d, ["--dump", "0x2001:00", "--dump", "0x2003:00"])
+            if dev is None:
+                record("rpdo", "device", "fail", "device not ready: " + bg.error(), m, d)
+                continue
+            try:
+                nmt(caps, "start")
+                time.sleep(0.3)
+                start = time.monotonic()
+                code, r = send(m, "a1b2", "01020304")
+                got = (sdo_value(caps, 0x2001), sdo_value(caps, 0x2003))
+                check("rpdo", "rpdo-event", code == 0 and got == ("a1b2", "01020304"),
+                      "0x2001=a1b2 0x2003=01020304 applied" if code == 0 and got == ("a1b2", "01020304")
+                      else "exit %d %s, read back %s" % (code, r.get("message", ""), got), m, d, start)
+                # synchronous RPDO (transmission type 1)
+                ok = sdo_write(caps, 0x1400, 2, "01")
+                cases = [("rpdo-sync-no-window", 0, 150, "c3d4", True),
+                         ("rpdo-sync-in-window", 50000, 5, "e5f6", True),
+                         ("rpdo-sync-after-window", 50000, 150, "0718",
+                          not caps[d]["features"].get("syncWindowRpdo"))]
+                for sc, window, delay, v1, applied in cases:
+                    start = time.monotonic()
+                    if not ok or not sdo_write(caps, 0x1007, 0, window.to_bytes(4, "little").hex()):
+                        record("rpdo", sc, "fail", "cannot configure 0x1400:02 / 0x1007 by SDO", m, d)
+                        continue
+                    before = sdo_value(caps, 0x2001)
+                    code, r = send(m, v1, "05060708", sync=True, delay=delay)
+                    after = sdo_value(caps, 0x2001)
+                    want = v1 if applied else before
+                    what = ("window %d us, RPDO %d ms after SYNC: %s" % (window, delay, "applied" if applied else
+                            "discarded (syncWindowRpdo)") if window else "no window, RPDO %d ms after SYNC: applied"
+                            % delay)
+                    if window and delay > window / 1000 and applied:
+                        what += " (the device does not discard RPDOs after the window: syncWindowRpdo false, " \
+                                "CiA 301 'may')"
+                    check("rpdo", sc, code == 0 and after == want,
+                          what if code == 0 and after == want else "exit %d %s: 0x2001 %s -> %s, want %s" % (
+                              code, r.get("message", ""), before, after, want), m, d, start)
+            finally:
+                dev.stop()
+
+
+# ── contract 1.1: lss ───────────────────────────────────────────────────────
+
+IDENTITY = ("0x00000000", "0x434F4931", "0x00010000")  # vendor, product, revision of the test device
+
+
+def lss(m, steps, timeout_ms=60000):
+    args = ["lss", "--interface", VCAN, "--timeout-ms", timeout_ms]
+    for st in steps:
+        args += ["--step", st]
+    code, docs, _ = run(m, args, timeout=timeout_ms / 1000 + 30)
+    return code, [d for d in docs if d.get("type") == "lss"], result_of(docs)
+
+
+def start_lss_slave(adapter, serial, extra=()):
+    return start_device(adapter, ["--serial", "0x%08X" % serial] + list(extra), node=255)
+
+
+def wait_node_id(dev, node, timeout):
+    return dev.wait_for(lambda d: d.get("type") == "node-id" and d.get("node") == node, timeout) is not None
+
+
+def lss_pair(caps, m, s, serial):
+    fm, fs = caps[m]["features"], caps[s]["features"]
+    dev, bg = start_lss_slave(s, serial)
+    if dev is None:
+        record("lss", "device", "fail", "unconfigured device not ready: " + bg.error(), m, s)
+        return
+    try:
+        # inquire
+        start = time.monotonic()
+        code, ev, r = lss(m, ["switch-global:configuration", "inquire:vendor-id", "inquire:product-code",
+                              "inquire:revision", "inquire:serial", "inquire:node-id", "switch-global:waiting"])
+        got = tuple(e.get("value") for e in ev if e.get("step") == "inquire" and "value" in e)
+        nid = [e.get("node") for e in ev if e.get("what") == "node-id"]
+        want = IDENTITY + ("0x%08X" % serial,)
+        check("lss", "lss-inquire", code == 0 and got == want and nid == [255],
+              "identity %s, node-ID 255" % " ".join(got) if code == 0 and got == want and nid == [255]
+              else "exit %d %s: %s node-ID %s" % (code, r.get("message", ""), got, nid), m, s, start)
+        # switch selective, configure node-ID, store
+        start = time.monotonic()
+        new_id = 40
+        code, ev, r = lss(m, ["switch-selective:%s:%s:%s:0x%08X" % (IDENTITY + (serial,)),
+                              "configure-node-id:%d" % new_id, "store", "switch-global:waiting"])
+        if code != 0:
+            check("lss", "lss-configure-node-id", False, "exit %d %s" % (code, r.get("message", "")), m, s, start)
+        else:
+            on_waiting = wait_node_id(dev, new_id, 3)
+            if m == "lely":
+                record("lss", "lss-activate-on-waiting", "skip", "lely's LSS master sends NMT reset communication "
+                       "after the steps: activation by 'switch to waiting' is not observable", m, s)
+            else:
+                check("lss", "lss-activate-on-waiting", on_waiting,
+                      "node-ID %d active after switch-global:waiting (no NMT command)" % new_id if on_waiting else
+                      "node-ID not active after switch-global:waiting (pending until NMT reset communication)",
+                      m, s, start)
+            if not on_waiting:
+                nmt(caps, "reset-communication", 0)
+                on_waiting = wait_node_id(dev, new_id, 3)
+            serial_read = sdo_value(caps, 0x1018, 4, node=new_id) if on_waiting else None
+            want = serial.to_bytes(4, "little").hex()
+            check("lss", "lss-configure-node-id", on_waiting and serial_read == want,
+                  "node %d answers SDO with serial %s" % (new_id, serial_read) if on_waiting and serial_read == want
+                  else "device node-ID event: %s, SDO 0x1018:04 of node %d: %s" % (on_waiting, new_id, serial_read),
+                  m, s, start)
+        # bit timing
+        if not (fm.get("lssBitTiming") and fs.get("lssSlaveBitTiming")):
+            record("lss", "lss-bit-timing", "skip", "no LSS bit timing (lssBitTiming/lssSlaveBitTiming)", m, s)
+        else:
+            start = time.monotonic()
+            dev.mark()
+            # configure (a confirmed service) on the selected slave, activate
+            # (unconfirmed) for every slave in the configuration state
+            code, ev, r = lss(m, ["switch-selective:%s:%s:%s:0x%08X" % (IDENTITY + (serial,)), "configure-bit-timing:3",
+                                  "switch-global:waiting", "switch-global:configuration", "activate-bit-timing:50",
+                                  "switch-global:waiting"])
+            b = dev.wait_for(lambda d: d.get("type") == "bit-rate", 3) if code == 0 else None
+            ok = b is not None and b.get("kbps") == 250 and b.get("delayMs") == 50
+            check("lss", "lss-bit-timing", ok, "the device activates 250 kbit/s after 50 ms" if ok else
+                  "exit %d %s, device: %s" % (code, r.get("message", ""), b), m, s, start)
+    finally:
+        dev.stop()
+    # fastscan
+    if not fm.get("lssFastscan"):
+        record("lss", "lss-fastscan", "skip", "master has no LSS fastscan (lssFastscan)", m, s)
+        return
+    dev, bg = start_lss_slave(s, serial + 1)
+    if dev is None:
+        record("lss", "device", "fail", "unconfigured device not ready: " + bg.error(), m, s)
+        return
+    try:
+        start = time.monotonic()
+        code, ev, r = lss(m, ["fastscan", "configure-node-id:41", "switch-global:waiting"], timeout_ms=90000)
+        addr = ev[0].get("address", {}) if ev else {}
+        got = (addr.get("vendorId"), addr.get("productCode"), addr.get("revision"), addr.get("serial"))
+        want = IDENTITY + ("0x%08X" % (serial + 1),)
+        active = code == 0 and (wait_node_id(dev, 41, 3) or (nmt(caps, "reset-communication", 0)
+                                                              and wait_node_id(dev, 41, 3)))
+        check("lss", "lss-fastscan", code == 0 and got == want and active,
+              "found %s, configured node-ID 41" % " ".join(got) if code == 0 and got == want and active
+              else "exit %d %s: found %s, node-ID 41 active: %s" % (code, r.get("message", ""), got, active),
+              m, s, start)
+    finally:
+        dev.stop()
+    # fastscan with only a configured slave on the bus: nobody may answer
+    dev, bg = start_device(s, ["--serial", "0x%08X" % (serial + 2)])
+    if dev is None:
+        record("lss", "device", "fail", "device not ready: " + bg.error(), m, s)
+        return
+    try:
+        start = time.monotonic()
+        code, ev, r = lss(m, ["fastscan"], timeout_ms=90000)
+        check("lss", "lss-fastscan-configured", code == 3,
+              "no answer from the configured node %d (exit 3)" % NODE if code == 3 else
+              "exit %d: found %s" % (code, ev[0].get("address") if ev else r.get("message")), m, s, start)
+    finally:
+        dev.stop()
+
+
+def suite_lss(caps):
+    masters = [a for a in caps if can(caps, a, "lss", "lssMaster")]
+    slaves = [a for a in caps if can(caps, a, "device", "lssSlave")]
+    for a in caps:
+        if a not in masters:
+            record("lss", "lss-master", "skip", "adapter has no LSS master (lss)", a, "")
+        if can(caps, a, "device") and a not in slaves:
+            record("lss", "lss-slave", "skip", "device has no LSS slave (lssSlave)", "", a)
+    serial = 0x100
+    for m in masters:
+        # no slave with this LSS address: switch selective times out
+        start = time.monotonic()
+        code, ev, r = lss(m, ["switch-selective:%s:%s:%s:0x7FFFFFFF" % IDENTITY], timeout_ms=10000)
+        check("lss", "lss-switch-selective-none", code == 3 and r.get("step") == "switch-selective",
+              "exit 3 (timeout) at switch-selective" if code == 3 else "exit %d %s" % (code, r), m, "", start)
+        for s in slaves:
+            serial += 0x10
+            lss_pair(caps, m, s, serial)
+    # assign-all: two unconfigured slaves of one stack
+    for m in [a for a in masters if caps[a]["features"].get("lssAssignAll")]:
+        for s in slaves:
+            serial += 0x10
+            devs = [start_lss_slave(s, serial + i)[0] for i in (1, 2)]
+            try:
+                if None in devs:
+                    record("lss", "lss-assign-all", "fail", "unconfigured devices not ready", m, s)
+                    continue
+                start = time.monotonic()
+                # from node-ID 126: two slaves take the last two node-IDs
+                code, ev, r = lss(m, ["assign-all:126:store"], timeout_ms=120000)
+                assigned = ev[0].get("assigned", []) if ev else []
+                got = sorted((a["node"], a["address"]["serial"]) for a in assigned)
+                want = [(126, "0x%08X" % (serial + 1)), (127, "0x%08X" % (serial + 2))]
+                check("lss", "lss-assign-all", code == 0 and got == want,
+                      "node-IDs 126, 127 by serial number" if code == 0 and got == want
+                      else "exit %d %s: assigned %s" % (code, r.get("message", ""), got), m, s, start)
+            finally:
+                for dv in devs:
+                    if dv is not None:
+                        dv.stop()
+    for m in [a for a in masters if not caps[a]["features"].get("lssAssignAll")]:
+        record("lss", "lss-assign-all", "skip", "master has no assign-all service (lssAssignAll)", m, "")
+
+
+# ── contract 1.1: mpdo ──────────────────────────────────────────────────────
+
+def suite_mpdo(caps):
+    producers = [a for a in caps if can(caps, a, "mpdo-send")]
+    consumers = [a for a in caps if can(caps, a, "mpdo-receive")]
+    for a in caps:
+        if a not in producers and a not in consumers:
+            record("mpdo", "mpdo", "skip", "adapter has no MPDO producer or consumer (mpdoDam/mpdoSam)", a, "")
+
+    def send(p, node, mode, cob, index, data, target=None):
+        args = ["mpdo-send", "--interface", VCAN, "--node-id", node, "--mode", mode, "--cob-id", cob,
+                "--index", index, "--data", data]
+        if target is not None:
+            args += ["--target", target]
+        code, docs, _ = run(p, args)
+        return code
+
+    for p in producers:
+        for c in consumers:
+            if caps[p]["features"].get("mpdoDam") and caps[c]["features"].get("mpdoDam"):
+                start = time.monotonic()
+                rx = Background(c, ["mpdo-receive", "--interface", VCAN, "--node-id", 10, "--mode", "dam",
+                                    "--cob-id", "0x300", "--count", 2, "--timeout-ms", 20000])
+                if not rx.wait_ready(15):
+                    record("mpdo", "mpdo-dam", "fail", "consumer not ready: " + rx.error(), p, c)
+                    rx.stop()
+                else:
+                    codes = [send(p, 11, "dam", "0x300", "0x2001", "efbe", 10),   # to node 10
+                             send(p, 11, "dam", "0x300", "0x2000", "99", 12),     # to node 12: ignored
+                             send(p, 11, "dam", "0x300", "0x2002", "78563412", 0)]  # to all nodes
+                    rx.wait_for(lambda d: d.get("type") == "result", 5)
+                    rx.stop()
+                    got = [(e["index"], e["data"]) for e in rx.docs if e.get("type") == "mpdo"]
+                    want = [("0x2001", "efbe"), ("0x2002", "78563412")]
+                    check("mpdo", "mpdo-dam", codes == [0, 0, 0] and got == want,
+                          "unicast and broadcast written, another node's ignored" if codes == [0, 0, 0] and got == want
+                          else "send exits %s, written %s" % (codes, got), p, c, start)
+            else:
+                record("mpdo", "mpdo-dam", "skip", "no DAM-MPDO (mpdoDam)", p, c)
+            if caps[p]["features"].get("mpdoSam") and caps[c]["features"].get("mpdoSam"):
+                start = time.monotonic()
+                rx = Background(c, ["mpdo-receive", "--interface", VCAN, "--node-id", 10, "--mode", "sam",
+                                    "--cob-id", "0x301", "--count", 2, "--timeout-ms", 20000,
+                                    "--dispatch", "11:0x2001:00:0x2001:00", "--dispatch", "12:0x2000:00:0x2000:00"])
+                if not rx.wait_ready(15):
+                    record("mpdo", "mpdo-sam", "fail", "consumer not ready: " + rx.error(), p, c)
+                    rx.stop()
+                else:
+                    codes = [send(p, 11, "sam", "0x301", "0x2001", "3412"),   # dispatched
+                             send(p, 13, "sam", "0x301", "0x2001", "5555"),   # producer not listed
+                             send(p, 11, "sam", "0x301", "0x2000", "66"),     # object not listed for node 11
+                             send(p, 12, "sam", "0x301", "0x2000", "77")]     # dispatched
+                    rx.wait_for(lambda d: d.get("type") == "result", 5)
+                    rx.stop()
+                    got = [(e["index"], e["data"]) for e in rx.docs if e.get("type") == "mpdo"]
+                    want = [("0x2001", "3412"), ("0x2000", "77")]
+                    check("mpdo", "mpdo-sam", codes == [0, 0, 0, 0] and got == want,
+                          "two dispatched objects written, two others ignored"
+                          if codes == [0, 0, 0, 0] and got == want else "send exits %s, written %s" % (codes, got),
+                          p, c, start)
+            else:
+                record("mpdo", "mpdo-sam", "skip", "no SAM-MPDO (mpdoSam)", p, c)
+
+
+# ── contract 1.1: boot ──────────────────────────────────────────────────────
+
+def suite_boot(caps):
+    masters = [a for a in caps if can(caps, a, "boot", "boot")]
+    for a in caps:
+        if a not in masters:
+            record("boot", "boot", "skip", "adapter has no CiA 302 boot master (boot)", a, "")
+    devices = [a for a in caps if can(caps, a, "device")]
+    nodes = {a: 21 + i for i, a in enumerate(devices)}
+    other = "/fixtures/eds/interop-device-other-product.eds"
+    for m in masters:
+        # the network: one device of every stack, configured by concise DCF
+        devs = {a: start_device(a, ["--dump", "0x2001:00", "--dump", "0x1017:00"], node=n)[0]
+                for a, n in nodes.items()}
+        try:
+            start = time.monotonic()
+            args = ["boot", "--interface", VCAN, "--timeout-ms", 20000]
+            for a, n in nodes.items():
+                args += ["--slave", "%d:%s:mandatory" % (n, EDS), "--sdo", "%d:0x2001:00=0x%04X" % (n, 0x4400 + n),
+                         "--sdo", "%d:0x1017:00=200" % n]
+            code, docs, _ = run(m, args, timeout=60)
+            ev = {d["node"]: d for d in docs if d.get("type") == "boot"}
+            for a, n in nodes.items():
+                if devs[a] is None:
+                    record("boot", "boot-slave", "fail", "device not ready", m, a)
+                    continue
+                e = ev.get(n)
+                value = sdo_value(caps, 0x2001, node=n)
+                want = (0x4400 + n).to_bytes(2, "little").hex()
+                hb = None
+                if e and e.get("ok"):
+                    lc, ldocs, _ = run(helper(caps, "listen", "listenHeartbeat"),
+                                       ["listen", "--interface", VCAN, "--node-id", n, "--count", 1,
+                                        "--timeout-ms", 3000])
+                    hb = next((d.get("state") for d in ldocs if d.get("type") == "heartbeat"), None)
+                ok = e is not None and e.get("ok") and value == want and hb == "operational"
+                check("boot", "boot-slave", ok, "booted: 0x2001=%s and heartbeat 200 ms by concise DCF, operational"
+                      % value if ok else "boot %s, 0x2001 %s (want %s), heartbeat state %s" % (
+                          e, value, want, hb), m, a, start)
+            record("boot", "boot-network", "pass" if code == 0 else "fail",
+                   "%d slaves of %d stacks booted" % (len(nodes), len(nodes)) if code == 0 else
+                   "exit %d: %s" % (code, result_of(docs)), m, "+".join(nodes))
+        finally:
+            for a, dv in devs.items():
+                if dv is not None:
+                    dv.stop()
+        # a device whose identity differs from the network list: error status M
+        for a in devices:
+            dv, bg = start_device(a, node=24)
+            if dv is None:
+                record("boot", "boot-identity-mismatch", "fail", "device not ready: " + bg.error(), m, a)
+                continue
+            try:
+                start = time.monotonic()
+                code, docs, _ = run(m, ["boot", "--interface", VCAN, "--timeout-ms", 20000,
+                                        "--slave", "24:%s:mandatory" % other], timeout=60)
+                e = next((d for d in docs if d.get("type") == "boot"), {})
+                ok = code == 5 and e.get("errorStatus") == "M"
+                check("boot", "boot-identity-mismatch", ok, "error status M (product code differs from 0x1F86)" if ok
+                      else "exit %d, boot %s" % (code, e), m, a, start)
+            finally:
+                dv.stop()
+        # a mandatory slave that does not exist: error status B
+        start = time.monotonic()
+        code, docs, _ = run(m, ["boot", "--interface", VCAN, "--timeout-ms", 20000, "--slave",
+                                "25:%s:mandatory" % EDS], timeout=60)
+        e = next((d for d in docs if d.get("type") == "boot"), {})
+        check("boot", "boot-missing-slave", code == 5 and e.get("errorStatus") == "B",
+              "error status B (no answer to 0x1000)" if code == 5 and e.get("errorStatus") == "B" else
+              "exit %d, boot %s" % (code, e), m, "", start)
+
+
+# ── contract 1.1: cdcf ──────────────────────────────────────────────────────
+
+def concise(entries):
+    """The CiA 302-3 concise DCF of [(index, subindex, bytes)]."""
+    out = len(entries).to_bytes(4, "little")
+    for index, sub, data in entries:
+        out += index.to_bytes(2, "little") + bytes([sub]) + len(data).to_bytes(4, "little") + data
+    return out
+
+
+def parse_concise(data):
+    n, pos, out = int.from_bytes(data[:4], "little"), 4, []
+    for _ in range(n):
+        index, sub = int.from_bytes(data[pos:pos + 2], "little"), data[pos + 2]
+        size = int.from_bytes(data[pos + 3:pos + 7], "little")
+        out.append((index, sub, data[pos + 7:pos + 7 + size]))
+        pos += 7 + size
+    return out if pos == len(data) else None
+
+
+def eds_value(dtype, raw, node):
+    """The CANopen encoding of an EDS value (basic types of the fixtures)."""
+    text = raw.strip()
+    if dtype == 0x0009:
+        return text.encode()
+    if dtype in (0x000F, 0x000A):
+        return bytes.fromhex(text) if text else b""
+    if dtype == 0x0008:
+        return b"\x00\x00\x00\x00" if text in ("0", "") else None
+    add = 0
+    if text.upper().startswith("$NODEID"):
+        add, text = node, text[7:].lstrip("+").strip() or "0"
+    v = int(text, 0) + add
+    size = SIZES[dtype]
+    return v.to_bytes(size, "little", signed=dtype in (0x0002, 0x0003, 0x0004, 0x0015))
+
+
+def dcf_values(path, node, lo, hi):
+    cfg = configparser.RawConfigParser()
+    cfg.optionxform = str
+    cfg.read(path)
+    out = []
+    for index, sub, dtype, _, default in eds_entries(path):
+        if not lo <= index <= hi:
+            continue
+        name = "%04X" % index if not any(s.upper().startswith("%04XSUB" % index) for s in cfg.sections()) \
+            else "%04Xsub%X" % (index, sub)
+        raw = cfg[name].get("ParameterValue", default)
+        out.append((index, sub, eds_value(dtype, raw, node)))
+    return out
+
+
+def suite_cdcf(caps):
+    gens = {"dcfgen": [a for a in caps if can(caps, a, "cdcf", "cdcfDcfgen")],
+            "objects": [a for a in caps if can(caps, a, "cdcf", "cdcfObjects")]}
+    for a in caps:
+        if not can(caps, a, "cdcf"):
+            record("cdcf", "cdcf", "skip", "adapter has no concise DCF generator (cdcf)", a, "")
+    # dcfgen: the --sdo entries, in order, with the size of each object's data type
+    sdo = [(0x2001, 0, 0x4455, 2), (0x1017, 0, 300, 2), (0x2003, 0, -2, 4), (0x2000, 0, 0x7F, 1),
+           (0x2007, 0, 0x1122334455667788, 8)]
+    want = concise([(i, s, v.to_bytes(n, "little", signed=v < 0)) for i, s, v, n in sdo])
+    for a in gens["dcfgen"]:
+        start = time.monotonic()
+        args = ["cdcf", "--dcf", EDS, "--node-id", NODE, "--generator", "dcfgen", "--output", "/work/cdcf-dcfgen.bin"]
+        for i, s, v, _ in sdo:
+            args += ["--sdo", "0x%04X:%02X=%d" % (i, s, v)]
+        code, docs, _ = run(a, args)
+        r = result_of(docs)
+        got = bytes.fromhex(r.get("data", ""))
+        try:
+            with open(os.path.join(WORK, "cdcf-dcfgen.bin"), "rb") as f:
+                written = f.read()
+        except OSError:
+            written = None
+        ok = code == 0 and got == want and written == got
+        check("cdcf", "cdcf-dcfgen", ok, "%d entries, %d bytes as CiA 302-3 encodes them" % (len(sdo), len(got))
+              if ok else "exit %d: %s, want %s (file %s)" % (code, got.hex() or r.get("message"), want.hex(),
+                                                               "same" if written == got else written), a, "", start)
+    # objects: every sub-object of a range of a DCF with its ParameterValue
+    dcf = os.path.join(ROOT, "fixtures", "eds", "interop-device-node5.dcf")
+    for a in gens["objects"]:
+        for lo, hi in ((0x1000, 0x1FFF), (0x2000, 0x2004)):
+            start = time.monotonic()
+            code, docs, _ = run(a, ["cdcf", "--dcf", "/fixtures/eds/interop-device-node5.dcf", "--node-id", NODE,
+                                    "--generator", "objects", "--range", "0x%04X-0x%04X" % (lo, hi)])
+            r = result_of(docs)
+            got = parse_concise(bytes.fromhex(r.get("data", ""))) if code == 0 else None
+            exp = dcf_values(dcf, NODE, lo, hi)
+            diff = [] if got is None else sorted(set(got) ^ set(exp))
+            ok = got is not None and not diff and [(i, s) for i, s, _ in got] == [(i, s) for i, s, _ in exp]
+            check("cdcf", "cdcf-objects-%04X-%04X" % (lo, hi), ok,
+                  "%d sub-objects in index order with the DCF's values ($NODEID=5, ParameterValue)" % len(exp)
+                  if ok else "exit %d %s: differs %s" % (code, r.get("message", ""),
+                                                          [(hex(i), s, d.hex() if d is not None else None)
+                                                           for i, s, d in diff[:6]]), a, "", start)
+
+
 # ── report ──────────────────────────────────────────────────────────────────
 
 def report(caps, outdir, started):
@@ -768,7 +1257,8 @@ def main():
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     caps = {a: capabilities(a) for a in adapters}
     for name, fn in (("od", suite_od), ("sdo", suite_sdo), ("nmt", suite_nmt), ("emcy", suite_emcy),
-                     ("pdo", suite_pdo), ("eds", suite_eds)):
+                     ("pdo", suite_pdo), ("eds", suite_eds), ("rpdo", suite_rpdo), ("lss", suite_lss),
+                     ("mpdo", suite_mpdo), ("boot", suite_boot), ("cdcf", suite_cdcf)):
         if name in suites:
             fn(caps)
     failed = report(caps, args.reports, started)

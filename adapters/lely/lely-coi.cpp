@@ -14,18 +14,29 @@
 //   lely-coi nmt IFACE MASTER_DCF NODE CS
 //   lely-coi listen IFACE MASTER_DCF DURATION_MS
 //   lely-coi pdo-receive IFACE MASTER_DCF NODE TPDO DURATION_MS
+//   lely-coi lss IFACE MASTER_DCF TIMEOUT_MS STEP...
+//   lely-coi mpdo-send IFACE NODE DCF MODE TARGET IDX SUB HEX COUNT PERIOD_MS
+//   lely-coi mpdo-receive IFACE NODE DCF DURATION_MS
+//   lely-coi boot IFACE MASTER_DCF DURATION_MS NODE...
+//   lely-coi cdcf DCF NODE MIN MAX OUTPUT
 //
 // Output lines: READY, RESULT ..., ERROR <abort code hex> <text>,
 // BOOTUP <node>, STATE <node> <state>, EMCY <node> <eec> <er> <hex>,
-// PDO <cob-id> <idx>:<sub>=<hex> ..., DUMP <idx>:<sub> <hex>|ERR.
+// PDO <cob-id> <idx>:<sub>=<hex> ..., DUMP <idx>:<sub> <hex>|ERR,
+// NODEID <id>, BITRATE <kbit/s> <delay ms>, STORE <id> <kbit/s>,
+// LSS <step> [values], LSSERR <step> <errc> <text>, DONE,
+// SENT <n>, WRITE <idx>:<sub> <hex>, BOOT <node> <state> <es|-> <text>.
 
 #include <lely/can/net.hpp>
+#include <lely/co/dcf.h>
 #include <lely/co/dev.hpp>
 #include <lely/co/nmt.hpp>
 #include <lely/co/obj.hpp>
 #include <lely/co/rpdo.hpp>
 #include <lely/co/sdo.h>
+#include <lely/co/tpdo.h>
 #include <lely/co/val.hpp>
+#include <lely/coapp/lss_master.hpp>
 #include <lely/coapp/master.hpp>
 #include <lely/coapp/sdo.hpp>
 #include <lely/coapp/slave.hpp>
@@ -196,6 +207,45 @@ class Device : public canopen::BasicSlave {
     snprintf(head, sizeof(head), "DUMP %04X:%02X ", idx, sub);
     Out(std::string(head) + (SubBytes(D(dev()), idx, sub, hex) ? hex : "ERR"));
   }
+
+  // The active node-ID of the device (co_dev_get_id), printed when it
+  // changes (an LSS-configured node-ID becomes active at NMT reset
+  // communication).
+  void
+  ReportId() {
+    int id = co_dev_get_id(D(dev()));
+    if (id != last_id_) {
+      last_id_ = id;
+      Out("NODEID " + std::to_string(id));
+    }
+  }
+
+  co_dev_t*
+  Dev() {
+    return D(dev());
+  }
+
+  co_nmt_t*
+  Nmt() {
+    return M(nmt());
+  }
+
+ protected:
+  // LSS 'store configuration' (CiA 305): the pending node-ID and bit rate
+  // are kept for the run (the device has no non-volatile memory).
+  void
+  OnStore(uint8_t id, int bitrate) override {
+    Out("STORE " + std::to_string(id) + " " + std::to_string(bitrate / 1000));
+  }
+
+  // LSS 'activate bit timing parameters': vcan has no bit rate to switch.
+  void
+  OnSwitchBitrate(int bitrate, milliseconds delay) noexcept override {
+    Out("BITRATE " + std::to_string(bitrate / 1000) + " " + std::to_string(delay.count()));
+  }
+
+ private:
+  int last_id_{-1};
 };
 
 int
@@ -233,8 +283,19 @@ CmdDevice(char** a) {
       if (!ec) dev.Emcy(eec, er, data);
     });
   }
+  io::Timer id_timer(rt.poll, rt.exec, CLOCK_MONOTONIC);
+  std::function<void()> watch_id = [&]() {
+    dev.ReportId();
+    id_timer.settime(milliseconds(20));
+    id_timer.submit_wait([&](int, std::error_code ec) {
+      if (!ec) watch_id();
+    });
+  };
   dev.Reset();  // boot: NMT 'reset node', boot-up, pre-operational
-  rt.exec.post([]() { Out("READY"); });
+  rt.exec.post([&]() {
+    Out("READY");
+    watch_id();
+  });
   rt.Run();
   if (dump != "-")
     for (auto& key : Split(dump, ',')) dev.Dump(key);
@@ -495,6 +556,319 @@ CmdPdoReceive(char** a) {
   return 0;
 }
 
+
+// ── LSS master (CiA 305) ─────────────────────────────────────────────────
+//
+// lely-core runs an LSS master only as part of the CiA 302 boot-up of an NMT
+// master: Reset() enters 'reset communication', the NMT service invokes the
+// LSS request function and LssMaster calls OnStart(). The steps run there;
+// when they are done the master's start-up continues (and sends NMT 'reset
+// communication' to all nodes).
+
+std::string
+ErrName(std::error_code ec) {
+  if (ec == std::errc::timed_out) return "timeout";
+  if (ec == std::errc::result_out_of_range) return "out-of-range";
+  if (ec == std::errc::invalid_argument) return "invalid-argument";
+  if (ec == std::errc::operation_not_supported) return "not-supported";
+  if (ec == std::errc::io_error) return "io-error";
+  return "protocol";
+}
+
+std::string
+Hex32(uint32_t v) {
+  char b[16];
+  snprintf(b, sizeof(b), "0x%08X", v);
+  return b;
+}
+
+std::string
+AddrText(const canopen::LssAddress& a) {
+  return Hex32(a.vendor_id) + " " + Hex32(a.product_code) + " " + Hex32(a.revision) + " " +
+         Hex32(a.serial_nr);
+}
+
+class LssCoi : public canopen::LssMaster {
+ public:
+  LssCoi(canopen::Node& node, std::vector<std::string> steps, std::function<void()> on_done)
+      : LssMaster(node), steps_(std::move(steps)), on_done_(std::move(on_done)) {}
+
+ protected:
+  void
+  OnStart(std::function<void(std::error_code ec)> res) noexcept override {
+    res_ = res;
+    Next(0);
+  }
+
+ private:
+  void
+  Finish() {
+    Out("DONE");
+    on_done_();
+    auto res = res_;
+    res(std::error_code{});
+  }
+
+  // Reports the completion of step i and runs the next one, or stops.
+  void
+  Done(size_t i, std::error_code ec, const std::string& values) {
+    const std::string name = Split(steps_[i], ':').at(0);
+    if (ec) {
+      Out("LSSERR " + name + " " + ErrName(ec) + " " + ec.message());
+      Out("DONE");
+      on_done_();
+      return;  // the master's start-up is not continued: the helper stops
+    }
+    Out("LSS " + name + (values.empty() ? "" : " " + values));
+    Next(i + 1);
+  }
+
+  void
+  Next(size_t i) {
+    if (i >= steps_.size()) return Finish();
+    auto f = Split(steps_[i], ':');
+    const std::string& name = f.at(0);
+    auto num = [&](size_t k) { return static_cast<uint32_t>(std::strtoul(f.at(k).c_str(), nullptr, 0)); };
+    auto con = [this, i](std::error_code ec) { Done(i, ec, ""); };
+    if (name == "switch-global") {
+      SubmitSwitch(nullptr, f.at(1) == "configuration" ? canopen::LssState::CONFIG : canopen::LssState::WAITING,
+                   con);
+    } else if (name == "switch-selective") {
+      SubmitSwitchSelective(nullptr, canopen::LssAddress(num(1), num(2), num(3), num(4)), con);
+    } else if (name == "configure-node-id") {
+      SubmitSetId(nullptr, static_cast<uint8_t>(num(1)), con);
+    } else if (name == "configure-bit-timing") {
+      SubmitSetBitrate(nullptr, static_cast<int>(num(1)), con);  // bit/s
+    } else if (name == "activate-bit-timing") {
+      SubmitSwitchBitrate(nullptr, static_cast<int>(num(1)), con);
+    } else if (name == "store") {
+      SubmitStore(nullptr, con);
+    } else if (name == "inquire") {
+      auto numcon = [this, i](std::error_code ec, uint32_t v) { Done(i, ec, Hex32(v)); };
+      const std::string& what = f.at(1);
+      if (what == "vendor-id")
+        SubmitGetVendorId(nullptr, numcon);
+      else if (what == "product-code")
+        SubmitGetProductCode(nullptr, numcon);
+      else if (what == "revision")
+        SubmitGetRevision(nullptr, numcon);
+      else if (what == "serial")
+        SubmitGetSerialNr(nullptr, numcon);
+      else
+        SubmitGetId(nullptr, [this, i](std::error_code ec, uint8_t id) { Done(i, ec, std::to_string(id)); });
+    } else if (name == "fastscan") {
+      SubmitFastscan(nullptr, canopen::LssAddress(), canopen::LssAddress(),
+                     [this, i](std::error_code ec, canopen::LssAddress a) { Done(i, ec, AddrText(a)); });
+    } else {
+      Out("LSSERR " + name + " protocol unknown step");
+      Out("DONE");
+      on_done_();
+    }
+  }
+
+  std::vector<std::string> steps_;
+  std::function<void()> on_done_;
+  std::function<void(std::error_code)> res_;
+};
+
+int
+CmdLss(int argc, char** a) {
+  Runtime rt(a[0]);
+  Master m(rt.timer, rt.chan, a[1], "", 0x7f);
+  milliseconds timeout(std::atoi(a[2]));
+  std::vector<std::string> steps(a + 3, a + argc);
+  // DONE ends the run 300 ms later (the master's start-up sends its NMT
+  // command in that time).
+  LssCoi lss(m, steps, [&]() { rt.StopAfter(milliseconds(300)); });
+  rt.StopAfter(timeout);
+  m.Reset();
+  rt.Run();
+  return 0;
+}
+
+// ── MPDO (CiA 301 7.2.2.3) ───────────────────────────────────────────────
+
+// A Device whose Transmit-PDO 1 is a DAM- or SAM-MPDO producer (configured by
+// the DCF): sends COUNT MPDOs once the device is operational.
+int
+CmdMpdoSend(char** a) {
+  Runtime rt(a[0]);
+  int node = std::atoi(a[1]);
+  Device dev(rt.timer, rt.chan, a[2], "", node);
+  std::string mode = a[3];
+  uint8_t target = static_cast<uint8_t>(std::atoi(a[4]));
+  uint16_t idx = static_cast<uint16_t>(std::strtoul(a[5], nullptr, 16));
+  uint8_t sub = static_cast<uint8_t>(std::strtoul(a[6], nullptr, 0));
+  auto data = Unhex(a[7]);
+  int count = std::atoi(a[8]);
+  milliseconds period(std::atoi(a[9]));
+  int sent = 0;
+  io::Timer timer(rt.poll, rt.exec, CLOCK_MONOTONIC);
+  std::function<void()> step = [&]() {
+    co_tpdo_t* pdo = co_nmt_get_tpdo(dev.Nmt(), 1);
+    if (co_nmt_get_st(dev.Nmt()) != CO_NMT_ST_START || !pdo) {
+      // not operational yet
+    } else {
+      int r;
+      if (mode == "dam") {
+        co_unsigned8_t buf[4] = {0, 0, 0, 0};
+        for (size_t i = 0; i < data.size() && i < 4; i++) buf[i] = data[i];
+        r = co_dam_mpdo_event(pdo, target, idx, sub, buf);
+      } else {
+        // The producer's own object (listed in the object scanner list
+        // 0x1FA0) gets the value, then lely sends it.
+        co_sub_t* s = co_dev_find_sub(dev.Dev(), idx, sub);
+        r = -1;
+        if (s) {
+          co_unsigned16_t type = co_sub_get_type(s);
+          union co_val v;
+          co_val_init(type, &v);
+          if (co_val_read(type, &v, data.data(), data.data() + data.size()) == data.size() &&
+              co_sub_set_val(s, &v, co_type_sizeof(type)) == co_type_sizeof(type))
+            r = co_sam_mpdo_event(pdo, idx, sub);
+          co_val_fini(type, &v);
+        }
+      }
+      if (r == -1) {
+        Out(mode == "dam" ? "MPDOERR co_dam_mpdo_event failed"
+                          : "MPDOERR no such object, or the data do not fit it, or co_sam_mpdo_event failed");
+        rt.Stop();
+        return;
+      }
+      if (++sent >= count) {
+        Out("SENT " + std::to_string(sent));
+        rt.StopAfter(milliseconds(100));  // let the channel send the frame
+        return;
+      }
+    }
+    timer.settime(sent ? period : milliseconds(20));
+    timer.submit_wait([&](int, std::error_code ec) {
+      if (!ec) step();
+    });
+  };
+  rt.StopAfter(milliseconds(std::atoi(a[9]) * count + 10000));
+  dev.Reset();
+  rt.exec.post([&]() { step(); });
+  rt.Run();
+  if (sent < count) Out("SENT " + std::to_string(sent));
+  return 0;
+}
+
+// Every write into the device's dictionary by its Receive-PDO (an MPDO
+// consumer) is reported by wrapping the download indication of the
+// manufacturer-specific and profile objects.
+struct DnWrap {
+  co_sub_dn_ind_t* ind;
+  void* data;
+};
+
+co_unsigned32_t
+OnDn(co_sub_t* sub, struct co_sdo_req* req, void* data) {
+  auto* w = static_cast<DnWrap*>(data);
+  co_unsigned32_t ac = w->ind ? w->ind(sub, req, w->data) : 0;
+  if (!w->ind) co_sub_on_dn(sub, req, &ac);
+  if (!ac && co_sdo_req_last(req)) {
+    std::string hex;
+    uint16_t idx = co_obj_get_idx(co_sub_get_obj(sub));
+    uint8_t subidx = co_sub_get_subidx(sub);
+    co_dev_t* dev = co_obj_get_dev(co_sub_get_obj(sub));
+    SubBytes(dev, idx, subidx, hex);
+    char head[32];
+    snprintf(head, sizeof(head), "WRITE %04X:%02X ", idx, subidx);
+    Out(std::string(head) + hex);
+  }
+  return ac;
+}
+
+int
+CmdMpdoReceive(char** a) {
+  Runtime rt(a[0]);
+  int node = std::atoi(a[1]);
+  Device dev(rt.timer, rt.chan, a[2], "", node);
+  rt.StopAfter(milliseconds(std::atoi(a[3])));
+  std::vector<std::unique_ptr<DnWrap>> wraps;
+  for (co_obj_t* obj = co_dev_first_obj(dev.Dev()); obj; obj = co_obj_next(obj)) {
+    if (co_obj_get_idx(obj) < 0x2000) continue;
+    for (co_sub_t* sub = co_obj_first_sub(obj); sub; sub = co_sub_next(sub)) {
+      auto w = std::make_unique<DnWrap>();
+      co_sub_get_dn_ind(sub, &w->ind, &w->data);
+      co_sub_set_dn_ind(sub, &OnDn, w.get());
+      wraps.push_back(std::move(w));
+    }
+  }
+  io::Timer timer(rt.poll, rt.exec, CLOCK_MONOTONIC);
+  std::function<void()> wait_op = [&]() {
+    if (co_nmt_get_st(dev.Nmt()) == CO_NMT_ST_START) {
+      Out("READY");
+      return;
+    }
+    timer.settime(milliseconds(20));
+    timer.submit_wait([&](int, std::error_code ec) {
+      if (!ec) wait_op();
+    });
+  };
+  dev.Reset();
+  rt.exec.post([&]() { wait_op(); });
+  rt.Run();
+  return 0;
+}
+
+// ── CiA 302 boot-up of a network (NMT master, concise DCF) ───────────────
+
+class BootMaster : public Master {
+ public:
+  using Master::Master;
+  std::vector<int> pending;
+  std::function<void()> all_done;
+
+ protected:
+  void
+  OnBoot(uint8_t id, canopen::NmtState st, char es, const std::string& what) noexcept override {
+    Master::OnBoot(id, st, es, what);
+    std::string text = what;
+    for (auto& c : text)
+      if (c == '\n') c = ' ';
+    Out("BOOT " + std::to_string(id) + " " + StateName(st) + " " + (es ? std::string(1, es) : "-") + " " + text);
+    for (auto it = pending.begin(); it != pending.end(); ++it)
+      if (*it == id) {
+        pending.erase(it);
+        break;
+      }
+    if (pending.empty() && all_done) all_done();
+  }
+};
+
+int
+CmdBoot(int argc, char** a) {
+  Runtime rt(a[0]);
+  BootMaster m(rt.timer, rt.chan, a[1], "", 0x7f);
+  for (int i = 3; i < argc; i++) m.pending.push_back(std::atoi(a[i]));
+  m.all_done = [&]() { rt.StopAfter(milliseconds(300)); };
+  rt.StopAfter(milliseconds(std::atoi(a[2])));
+  m.Reset();
+  rt.exec.post([]() { Out("READY"); });
+  rt.Run();
+  return 0;
+}
+
+// ── concise DCF of a device's dictionary ─────────────────────────────────
+
+int
+CmdCdcf(char** a) {
+  co_dev_t* dev = co_dev_create_from_dcf_file(a[0]);
+  if (!dev) {
+    Out("FATAL cannot load the DCF");
+    return 1;
+  }
+  co_dev_set_id(dev, static_cast<co_unsigned8_t>(std::atoi(a[1])));
+  uint16_t min = static_cast<uint16_t>(std::strtoul(a[2], nullptr, 16));
+  uint16_t max = static_cast<uint16_t>(std::strtoul(a[3], nullptr, 16));
+  int r = co_dev_write_dcf_file(dev, min, max, a[4]);
+  co_dev_destroy(dev);
+  Out(r == 0 ? "RESULT" : "FATAL co_dev_write_dcf_file failed");
+  return r == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int
@@ -506,8 +880,24 @@ main(int argc, char** argv) {
   } cmds[] = {
       {"device", 8, CmdDevice},      {"upload", 7, CmdUpload},       {"download", 8, CmdDownload},
       {"nmt", 4, CmdNmt},            {"listen", 3, CmdListen},       {"pdo-receive", 5, CmdPdoReceive},
+      {"mpdo-send", 10, CmdMpdoSend}, {"mpdo-receive", 4, CmdMpdoReceive}, {"cdcf", 5, CmdCdcf},
   };
+  struct {
+    const char* name;
+    int min;
+    int (*fn)(int, char**);
+  } vcmds[] = {{"lss", 4, CmdLss}, {"boot", 4, CmdBoot}};
   if (argc >= 2) {
+    for (auto& c : vcmds) {
+      if (std::strcmp(argv[1], c.name) == 0 && argc >= c.min + 2) {
+        try {
+          return c.fn(argc - 2, argv + 2);
+        } catch (std::exception& e) {
+          Out(std::string("FATAL ") + e.what());
+          return 1;
+        }
+      }
+    }
     for (auto& c : cmds) {
       if (std::strcmp(argv[1], c.name) == 0 && argc == c.args + 2) {
         try {
@@ -519,6 +909,8 @@ main(int argc, char** argv) {
       }
     }
   }
-  std::fprintf(stderr, "usage: lely-coi device|upload|download|nmt|listen|pdo-receive ...\n");
+  std::fprintf(stderr,
+               "usage: lely-coi device|upload|download|nmt|listen|pdo-receive|lss|mpdo-send|mpdo-receive|boot|cdcf "
+               "...\n");
   return 2;
 }

@@ -12,8 +12,11 @@ output lines into JSON documents (adapters/common/coi.py).
 
 import os
 import queue
+import shutil
 import signal
 import subprocess
+import sys
+import tempfile
 import threading
 import warnings
 
@@ -44,6 +47,21 @@ CAPABILITIES = {
         "sync": False,                 # not provided in v0.1.0 (LIMITATIONS.md)
         "edsCheck": True,
         "cia402": False,
+        # contract 1.1
+        "lssMaster": True,             # coapp LssMaster in the CiA 302 boot-up (LIMITATIONS.md)
+        "lssBitTiming": True,          # not table index 9 (automatic): coapp takes bit/s
+        "lssFastscan": True,
+        "lssAssignAll": False,         # lely-core has no "configure all nodes" service
+        "lssSlave": True,              # co_lss slave of BasicSlave (LSS_Supported=1)
+        "lssSlaveBitTiming": True,
+        "lssSlaveStore": True,         # BasicSlave::OnStore (RAM, for the run)
+        "rpdoSend": False,
+        "mpdoDam": True,               # co_dam_mpdo_event, co_rpdo (DAM consumer)
+        "mpdoSam": True,               # co_sam_mpdo_event with 0x1FA0, co_rpdo with 0x1FD0
+        "boot": True,                  # CiA 302 NMT master boot-up, concise DCF (0x1F22) from dcfgen
+        "cdcfDcfgen": True,            # dcf-tools dcfgen
+        "cdcfObjects": True,           # co_dev_write_dcf
+        "syncWindowRpdo": True,        # co_rpdo discards synchronous RPDOs after the window (0x1007)
     },
 }
 
@@ -77,7 +95,7 @@ def _array(index, name, dtype, access, values, pdo=False, otype="0x8"):
     return out
 
 
-def master_dcf(path, hb_nodes=(), emcy_nodes=()):
+def master_dcf(path, hb_nodes=(), emcy_nodes=(), lss=False):
     """The master's DCF: NMT master (0x1F80 bit 0) without slaves (0x1F81),
     heartbeat consumers (0x1016) and EMCY consumers (0x1028) for the given
     nodes, one Receive-PDO (0x1400/0x1600) and its target arrays 0x5F00-0x5F03
@@ -111,7 +129,7 @@ def master_dcf(path, hb_nodes=(), emcy_nodes=()):
     head = ["[FileInfo]", "FileName=coi-master.dcf", "EDSVersion=4.0", "Description=canopen-interop lely master", "",
             "[DeviceInfo]", "VendorName=otfabric", "VendorNumber=0x00000000", "ProductName=canopen-interop lely master",
             "BaudRate_500=1", "SimpleBootUpMaster=1", "SimpleBootUpSlave=0", "Granularity=8", "NrOfRXPDO=1",
-            "NrOfTXPDO=0", "LSS_Supported=0", "",
+            "NrOfTXPDO=0", "LSS_Supported=%d" % lss, "",
             "[DeviceComissioning]", "NodeID=%d" % MASTER_NODE_ID, "CANopenManager=1", "",
             "[DummyUsage]"] + ["Dummy%04X=0" % i for i in range(1, 8)] + [""]
     for title, group in (("MandatoryObjects", mandatory), ("OptionalObjects", optional),
@@ -123,29 +141,37 @@ def master_dcf(path, hb_nodes=(), emcy_nodes=()):
     return path
 
 
-def device_dcf(eds, heartbeat_ms):
+def device_dcf(eds, heartbeat_ms, params=None, startup=0x00000004):
     """The device's EDS as lely-coi loads it: with 0x1F80 (NMT start-up) =
     0x00000004, so that the device waits in pre-operational for NMT start
     like the other devices (a lely slave without 0x1F80 starts itself), and
     with ParameterValue of 0x1017 set to the power-on heartbeat time (lely
-    restores it on NMT reset)."""
+    restores it on NMT reset). params: further ParameterValues, keyed by
+    section name ("1018sub4")."""
+    params = {k.upper(): v for k, v in (params or {}).items()}
+    if heartbeat_ms is not None:
+        params["1017"] = "%d" % heartbeat_ms
     with open(eds, "r", newline="") as f:
         lines = f.read().splitlines()
-    out, section, has_1f80 = [], None, False
+    out, section, has_1f80, seen = [], None, False, set()
     for line in lines:
         s = line.strip()
         if s.startswith("[") and s.endswith("]"):
             section = s[1:-1].upper()
             has_1f80 = has_1f80 or section == "1F80"
             out.append(line)
-            if section == "1017" and heartbeat_ms is not None:
-                out.append("ParameterValue=%d" % heartbeat_ms)
+            if section in params:
+                out.append("ParameterValue=%s" % params[section])
+                seen.add(section)
             continue
-        if section == "1017" and heartbeat_ms is not None and s.lower().startswith("parametervalue="):
+        if section in params and s.lower().startswith("parametervalue="):
             continue
         out.append(line)
-    if heartbeat_ms is not None and not any(l.strip().upper() == "[1017]" for l in lines):
+    if heartbeat_ms is not None and "1017" not in seen:
         raise coi.usage("the EDS has no object 0x1017 for --heartbeat-ms")
+    missing = sorted(set(params) - seen)
+    if missing:
+        raise coi.usage("the EDS has no sub-object %s" % ", ".join(missing))
     if not has_1f80:
         fixed, section = [], None
         for line in out:
@@ -159,7 +185,9 @@ def device_dcf(eds, heartbeat_ms):
                 continue
             fixed.append(line)
         out = fixed + ["", "[1F80]", "ParameterName=NMT startup", "ObjectType=0x7", "DataType=0x0007",
-                       "AccessType=rw", "DefaultValue=0x00000004", "PDOMapping=0"]
+                       "AccessType=rw", "DefaultValue=0x%08X" % startup, "PDOMapping=0"]
+    elif startup != 0x00000004:
+        raise coi.usage("the EDS has its own 0x1F80")
     path = "/tmp/coi-device-%d.dcf" % os.getpid()
     with open(path, "w") as f:
         f.write("\n".join(out) + "\n")
@@ -370,6 +398,274 @@ def cmd_eds_check(args, caps):
                         errors=errors, objects=objects))
 
 
+# ── LSS master ──────────────────────────────────────────────────────────────
+
+LSS_ERRORS = {  # coapp error -> CiA 305 error code, per step
+    ("configure-node-id", "out-of-range"): 1,
+    ("configure-bit-timing", "invalid-argument"): 1,
+    ("store", "not-supported"): 1,
+    ("store", "io-error"): 2,
+}
+
+
+def cmd_lss(args, caps):
+    """lely-coi lss: coapp's LssMaster in the LSS phase of the master's
+    CiA 302 boot-up (afterwards the start-up sends NMT reset communication
+    to all nodes, LIMITATIONS.md)."""
+    steps = []
+    for name, arg in args.step:
+        if name == "switch-global":
+            steps.append("switch-global:" + arg)
+        elif name == "switch-selective":
+            steps.append("switch-selective:%d:%d:%d:%d" % arg)
+        elif name == "configure-node-id":
+            steps.append("configure-node-id:%d" % arg)
+        elif name == "configure-bit-timing":
+            if coi.BIT_TIMING[arg] == 0:
+                raise coi.unsupported("lely's LSS master takes a bit rate in bit/s: no automatic bit rate (index 9)")
+            steps.append("configure-bit-timing:%d" % (coi.BIT_TIMING[arg] * 1000))
+        elif name == "activate-bit-timing":
+            steps.append("activate-bit-timing:%d" % arg)
+        elif name == "inquire":
+            steps.append("inquire:" + arg)
+        else:
+            steps.append(name)
+    path = master_dcf("/tmp/coi-master-%d.dcf" % os.getpid(), lss=True)
+    h = Helper(["lss", args.interface, path, args.timeout_ms] + steps)
+    deadline = coi.Deadline(args.timeout_ms + 3000)
+    done, i = False, 0
+    try:
+        while not done:
+            line = h.next(deadline.remaining())
+            if line == "":
+                if deadline.expired():
+                    raise coi.timeout("LSS steps did not complete")
+                continue
+            if line is None:
+                h.fail(None)
+            f = line.split()
+            if f[0] == "DONE":
+                done = True
+            elif f[0] == "LSSERR":
+                step, err = f[1], f[2]
+                if err == "timeout":
+                    raise coi.lss_timeout(step)
+                code = LSS_ERRORS.get((step, err))
+                if code is not None:
+                    raise coi.lss_error(step, code, "LSS %s: the slave rejected the request (%s)" % (step, err))
+                raise coi.protocol_error("LSS %s: %s" % (step, " ".join(f[2:])), step=step)
+            elif f[0] == "LSS":
+                name, arg = args.step[i]
+                i += 1
+                if name == "switch-global":
+                    coi.emit(coi.lss_event(name, mode=arg))
+                elif name == "switch-selective":
+                    coi.emit(coi.lss_event(name, address=coi.lss_address(*arg)))
+                elif name == "configure-node-id":
+                    coi.emit(coi.lss_event(name, node=arg))
+                elif name == "configure-bit-timing":
+                    coi.emit(coi.lss_event(name, tableIndex=arg, kbps=coi.BIT_TIMING[arg]))
+                elif name == "activate-bit-timing":
+                    coi.emit(coi.lss_event(name, delayMs=arg))
+                elif name == "inquire":
+                    if arg == "node-id":
+                        coi.emit(coi.lss_event(name, what=arg, node=int(f[2])))
+                    else:
+                        coi.emit(coi.lss_event(name, what=arg, value=f[2]))
+                elif name == "fastscan":
+                    coi.emit(coi.lss_event(name, address=coi.lss_address(*(int(x, 16) for x in f[2:6]))))
+                else:
+                    coi.emit(coi.lss_event(name))
+            elif f[0] in ("ERROR", "FATAL"):
+                h.fail(line)
+        # let the master's start-up go out (NMT reset communication)
+        h.proc.wait(5)
+    finally:
+        h.stop()
+    if i != len(args.step):
+        raise coi.internal("lely-coi lss reported %d of %d steps" % (i, len(args.step)))
+    coi.emit(coi.result("lss", steps=len(args.step)))
+
+
+# ── MPDO ────────────────────────────────────────────────────────────────────
+
+MPDO_EDS = "/fixtures/eds/mpdo-device.eds"
+
+
+def cmd_mpdo_send(args, caps):
+    """A lely device (fixtures/eds/mpdo-device.eds, self-starting) whose
+    TPDO 1 is a DAM- or SAM-MPDO producer; lely sends the MPDOs."""
+    params = {"1800sub1": "0x%08X" % args.cob_id, "1800sub2": "0xFF",
+              "1A00sub0": "0xFF" if args.mode == "dam" else "0xFE",
+              "1400sub1": "0x80000200"}
+    if args.mode == "sam":
+        # object scanner list: block size 1, the object
+        params.update({"1FA0sub0": "1", "1FA0sub1": "0x%08X" % (1 << 24 | args.index << 8 | args.subindex)})
+    path = device_dcf(MPDO_EDS, None, params, startup=0)
+    out = run_once_lines(["mpdo-send", args.interface, args.node_id, path, args.mode, args.target,
+                          "%04X" % args.index, args.subindex, args.data.hex(), args.count, args.period_ms],
+                         args.count * args.period_ms + 10000)
+    sent = int(out[-1].split()[1])
+    coi.emit(coi.result("mpdo-send", node=args.node_id, mode=args.mode, cobId="0x%03X" % args.cob_id, sent=sent))
+    if sent < args.count:
+        raise coi.timeout("%d of %d MPDOs sent (the device did not become operational)" % (sent, args.count))
+
+
+def run_once_lines(helper_args, timeout_ms):
+    """Run lely-coi to its SENT/RESULT line; the lines seen."""
+    h = Helper(helper_args)
+    deadline = coi.Deadline(timeout_ms + 3000)
+    seen = []
+    try:
+        while True:
+            line = h.next(deadline.remaining())
+            if line == "":
+                if deadline.expired():
+                    raise coi.timeout("lely-coi did not finish")
+                continue
+            if line is None:
+                h.fail(None)
+            if line.startswith("MPDOERR "):
+                raise coi.protocol_error("lely: " + line[8:])
+            if line.startswith(("ERROR", "FATAL")):
+                h.fail(line)
+            seen.append(line)
+            if line.startswith(("SENT", "RESULT")):
+                return seen
+    finally:
+        h.stop()
+
+
+def cmd_mpdo_receive(args, caps):
+    """A lely device (fixtures/eds/mpdo-device.eds, self-starting) whose
+    RPDO 1 is a DAM- or SAM-MPDO consumer (SAM: object dispatching list
+    0x1FD0); every object lely's RPDO service writes is reported."""
+    params = {"1400sub1": "0x%08X" % args.cob_id, "1400sub2": "0xFF",
+              "1600sub0": "0xFF" if args.mode == "dam" else "0xFE",
+              "1800sub1": "0x80000180"}
+    if args.mode == "sam":
+        if len(args.dispatch) > 4:
+            raise coi.usage("at most 4 --dispatch entries (0x1FD0 of fixtures/eds/mpdo-device.eds)")
+        params["1FD0sub0"] = str(len(args.dispatch))
+        for n, (prod, ridx, rsub, lidx, lsub) in enumerate(args.dispatch, 1):
+            params["1FD0sub%X" % n] = "0x%016X" % (1 << 56 | lidx << 40 | lsub << 32 | ridx << 16 | rsub << 8 | prod)
+    path = device_dcf(MPDO_EDS, None, params, startup=0)
+
+    def handle(line):
+        f = line.split()
+        if f[0] != "WRITE":
+            return None
+        idx, sub = f[1].split(":")
+        return coi.event("mpdo", node=args.node_id, index=coi.hex_index(int(idx, 16)), subindex=int(sub, 16),
+                         data=f[2] if len(f) > 2 else "")
+
+    stream(args, ["mpdo-receive", args.interface, args.node_id, path, args.timeout_ms + 1000], handle, "MPDO writes")
+
+
+# ── CiA 302 boot-up and concise DCFs (dcfgen) ───────────────────────────────
+
+def dcfgen(workdir, slaves, sdo, start=True, boot_time_ms=0):
+    """Lely's dcfgen on a YAML configuration: master.dcf and one concise DCF
+    (<name>.bin) per slave with SDO entries. slaves: [(node, dcf, mandatory)]."""
+    import yaml
+    cfg = {"options": {"dcf_path": workdir},
+           "master": {"node_id": MASTER_NODE_ID, "start": start, "start_nodes": start, "boot_time": boot_time_ms}}
+    for node, path, mandatory in slaves:
+        entry = {"dcf": path, "node_id": node, "mandatory": mandatory}
+        entries = [{"index": i, "sub_index": s, "value": v} for n, i, s, v in sdo if n == node]
+        if entries:
+            entry["sdo"] = entries
+        cfg["node%d" % node] = entry
+    with open(os.path.join(workdir, "network.yml"), "w") as f:
+        yaml.safe_dump(cfg, f)
+    p = subprocess.run([sys.executable, "-W", "ignore", "-c", "from dcfgen.cli import main; main()",
+                        "-d", workdir, "-v", os.path.join(workdir, "network.yml")],
+                       capture_output=True, text=True, cwd=workdir)
+    if p.returncode != 0:
+        raise coi.protocol_error("dcfgen: %s" % (p.stderr.strip().splitlines() or ["exit %d" % p.returncode])[-1])
+    return p.stdout
+
+
+def cmd_boot(args, caps):
+    """The CiA 302 boot-up of lely's NMT master: dcfgen writes the master
+    DCF (network list 0x1F81, expected identity 0x1F84-0x1F88, a concise DCF
+    per configured slave in 0x1F22), lely-coi boots the network and reports
+    each slave's 'boot slave' result (error status A-O of CiA 302-2)."""
+    workdir = tempfile.mkdtemp(prefix="coi-boot-")
+    try:
+        # 0x1F89 (boot time): lely ends the 'boot slave' process of a
+        # mandatory slave that does not answer with error status B once this
+        # time has elapsed (after its SDO retries): half the time limit.
+        dcfgen(workdir, args.slave, args.sdo, start=not args.no_start,
+               boot_time_ms=max(500, args.timeout_ms // 2))
+        nodes = [n for n, _, _ in args.slave]
+        h = Helper(["boot", args.interface, os.path.join(workdir, "master.dcf"), args.timeout_ms] + nodes)
+        deadline = coi.Deadline(args.timeout_ms + 3000)
+        final = {}  # node -> ok of its last 'boot slave' result
+        try:
+            while len(final) < len(nodes):
+                line = h.next(deadline.remaining())
+                if line == "":
+                    if deadline.expired():
+                        break
+                    continue
+                if line is None:
+                    break
+                if line.startswith("FATAL"):
+                    h.fail(line)
+                f = line.split(" ", 4)
+                if f[0] != "BOOT" or int(f[1]) not in nodes:
+                    continue
+                # A slave that sends another boot-up while it is booted is
+                # booted again: every result is an event, the last one counts.
+                node, es = int(f[1]), f[3]
+                ok = es == "-"
+                final[node] = ok
+                coi.emit(coi.event("boot", node=node, ok=ok, errorStatus=None if ok else es,
+                                   message=f[4] if len(f) > 4 else ""))
+        finally:
+            h.stop()
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    booted = [n for n in nodes if final.get(n) is True]
+    failed = [n for n in nodes if final.get(n) is False]
+    missing = [n for n in nodes if n not in final]
+    coi.emit(coi.result("boot", booted=booted, failed=failed, missing=missing))
+    if failed:
+        raise coi.protocol_error("boot slave failed for node(s) %s" % ", ".join(map(str, failed)))
+    if missing:
+        raise coi.timeout("no boot result for node(s) %s" % ", ".join(map(str, missing)))
+
+
+def cmd_cdcf(args, caps):
+    """A concise DCF (CiA 302-3) for node --node-id of a DCF: dcfgen (the
+    configuration entries of --sdo) or lely-core's co_dev_write_dcf (every
+    sub-object of --range with its value)."""
+    workdir = tempfile.mkdtemp(prefix="coi-cdcf-")
+    try:
+        if args.generator == "dcfgen":
+            if not args.sdo:
+                raise coi.usage("cdcf --generator dcfgen needs --sdo entries (dcfgen writes no file without)")
+            sdo = [(args.node_id, i, s, v) for _, i, s, v in args.sdo]
+            dcfgen(workdir, [(args.node_id, os.path.abspath(args.dcf), False)], sdo)
+            path = os.path.join(workdir, "node%d.bin" % args.node_id)
+        else:
+            path = os.path.join(workdir, "objects.bin")
+            run_once(["cdcf", os.path.abspath(args.dcf), args.node_id, "%04X" % args.range[0],
+                      "%04X" % args.range[1], path], 10000)
+        with open(path, "rb") as f:
+            data = f.read()
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    if args.output:
+        try:
+            with open(args.output, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            raise coi.usage("--output %s: %s" % (args.output, e))
+    coi.emit(coi.result("cdcf", generator=args.generator, node=args.node_id, size=len(data), data=data.hex()))
+
+
 # ── device ──────────────────────────────────────────────────────────────────
 
 def cmd_device(args, caps):
@@ -380,12 +676,14 @@ def cmd_device(args, caps):
             raise coi.unsupported("lely sets bit 0 (generic error) of the error register with every EMCY: "
                                   "register 0x%02X cannot be sent" % register)
         emcy = "%04X:%02X:%s" % (code, register, data.hex())
-    dcf_path = device_dcf(args.eds, args.heartbeat_ms)
+    params = {"1018sub4": "0x%08X" % args.serial} if args.serial is not None else None
+    dcf_path = device_dcf(args.eds, args.heartbeat_ms, params)
     dump = ",".join("%04X:%02X" % k for k in args.dump) or "-"
     h = Helper(["device", args.interface, args.node_id, dcf_path, args.timeout_ms, args.tick_ms or 0, emcy,
                 args.emcy_after_ms, dump])
     stop = coi.Stop()
     dumps, ready, ended = {}, False, False
+    node_id = args.node_id
     try:
         while not ended:
             if stop.requested and h.proc.poll() is None:
@@ -397,7 +695,18 @@ def cmd_device(args, caps):
                 break
             if line == "READY" and not ready:
                 ready = True
-                coi.emit(coi.event("ready", node=args.node_id))
+                if args.node_id == coi.LSS_UNCONFIGURED:
+                    coi.emit(coi.event("ready"))
+                else:
+                    coi.emit(coi.event("ready", node=args.node_id))
+            elif line.startswith("NODEID "):
+                nid = int(line[7:])
+                if nid != node_id:  # an LSS-configured node-ID became active
+                    node_id = nid
+                    coi.emit(coi.event("node-id", node=nid))
+            elif line.startswith("BITRATE "):
+                kbps, delay = (int(x) for x in line[8:].split())
+                coi.emit(coi.event("bit-rate", kbps=kbps, delayMs=delay))
             elif line.startswith("DUMP "):
                 key, _, value = line[5:].partition(" ")
                 idx, sub = key.split(":")
@@ -411,7 +720,7 @@ def cmd_device(args, caps):
     if not ready:
         raise coi.internal("lely-coi device did not start: %s" % " | ".join(h.stderr[-3:]))
     values = {coi.hex_key(i, s): dumps.get(coi.hex_key(i, s)) for i, s in args.dump}
-    coi.emit(coi.result("device", node=args.node_id, values=values))
+    coi.emit(coi.result("device", node=args.node_id, values=values, nodeId=node_id))
 
 
 if __name__ == "__main__":
@@ -423,4 +732,9 @@ if __name__ == "__main__":
         "listen": cmd_listen,
         "pdo-receive": cmd_pdo_receive,
         "eds-check": cmd_eds_check,
+        "lss": cmd_lss,
+        "mpdo-send": cmd_mpdo_send,
+        "mpdo-receive": cmd_mpdo_receive,
+        "boot": cmd_boot,
+        "cdcf": cmd_cdcf,
     })

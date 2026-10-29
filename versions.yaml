@@ -3,12 +3,13 @@
 # The Dockerfiles and adapters/*/requirements.txt are the source of truth for
 # a build: scripts/check-versions.sh fails when this file disagrees with them.
 
-interop_version: "0.1.0"
-contract_version: "1.0"          # docs/CONTAINER_CONTRACT.md; documents carry schemaVersion "1.0"
-fixture_schema: "1.0"            # fixtures/eds (CiA 306 EDS/DCF), docs/FIXTURES.md
+interop_version: "0.2.0"
+contract_version: "1.1"          # docs/CONTAINER_CONTRACT.md; documents carry schemaVersion "1.0" (the 1.x line)
+fixture_schema: "1.1"            # fixtures/eds (CiA 306 EDS/DCF), docs/FIXTURES.md; 1.1 adds 0x1007, LSS_Supported=1 and two fixtures
 
 protocol:
-  name: "CANopen (CiA 301 SDO/NMT/heartbeat/EMCY/PDO/SYNC, CiA 306 EDS/DCF, CiA 402 drive state machine)"
+  name: "CANopen (CiA 301 SDO/NMT/heartbeat/EMCY/PDO/MPDO/SYNC window, CiA 302 boot-up and concise DCF, CiA 305 LSS, CiA 306 EDS/DCF, CiA 402 drive state machine)"
+  not_covered: "CANopen FD (CiA 1301, USDO): none of the pinned open-source stacks implements it"
   transport: "Linux SocketCAN on vcan (host network namespace)"
 
 base_images:
@@ -33,7 +34,8 @@ implementations:
     license: "Apache-2.0"
     language: "C"
     stack: "CANopenNode v4.1 in CANopenLinux's canopend on SocketCAN; CiA 309-3 ASCII gateway for the master role"
-    roles: [device, sdo-upload, sdo-download, nmt, listen]
+    roles: [device, sdo-upload, sdo-download, nmt, listen, lss]
+    patches: "309/CO_gateway_ascii.c token buffer 20 -> 21 bytes, upstream commit cf85a4c (master, PR #627) for lss_activate_bitrate; no release contains it yet"
     published: true
     note: "The image ships the source tarballs and the generated OD.c/OD.h in /usr/share/src/canopennode."
 
@@ -46,8 +48,9 @@ implementations:
     source_sha256: "38bd773ae92bb59087759696cede81ca825577fa3ee09c67ae126c0238ee1ce8"
     license: "Apache-2.0"
     language: "C/C++"
-    stack: "liblely-coapp/liblely-co on SocketCAN (io2) through adapters/lely/lely-coi.cpp; Python dcf-tools"
-    roles: [device, sdo-upload, sdo-download, nmt, listen, pdo-receive, eds-check]
+    stack: "liblely-coapp/liblely-co on SocketCAN (io2) through adapters/lely/lely-coi.cpp; Python dcf-tools (dcfchk, dcfgen)"
+    roles: [device, sdo-upload, sdo-download, nmt, listen, pdo-receive, eds-check, lss, mpdo-send, mpdo-receive, boot, cdcf]
+    python_requirements: "adapters/lely/requirements.txt (PyYAML 6.0.3, empy 3.3.4, setuptools 80.9.0 for dcfgen)"
     published: true
     note: "The image ships the source tarball in /usr/share/src/lely."
 
@@ -61,5 +64,5 @@ implementations:
     license: "MIT"
     language: "Python"
     stack: "python canopen on python-can 4.6.1 (socketcan)"
-    roles: [device, sdo-upload, sdo-download, nmt, listen, pdo-configure, pdo-receive, sync, eds-check, cia402]
+    roles: [device, sdo-upload, sdo-download, nmt, listen, pdo-configure, pdo-receive, sync, eds-check, cia402, lss, rpdo-send]
     published: true
