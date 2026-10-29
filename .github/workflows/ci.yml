@@ -1,0 +1,85 @@
+name: CI
+run-name: "CI (${{ github.event_name }}) on ${{ github.ref_name }} by @${{ github.actor }}"
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Base images (pinned by digest) and build tooling come from Google's mirror
+  # of Docker Hub: anonymous Docker Hub pulls are rate limited per runner.
+  BASE_REGISTRY: mirror.gcr.io/library
+  TOOLS_REGISTRY: mirror.gcr.io
+
+jobs:
+  validate:
+    name: Validate and lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema
+      - run: make validate lint
+
+  # Every image built natively on each architecture (no emulation), then the
+  # contract smoke test and the whole reference-to-reference self-test on a
+  # vcan interface of the runner.
+  selftest:
+    name: Build and self-test (${{ matrix.arch }})
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema
+
+      - name: Load the CAN modules and create vcan0
+        run: scripts/ci-can-modules.sh && make vcan ADMIN=sudo
+
+      - name: Build the images
+        run: make -j3 --output-sync=target images
+
+      - name: Smoke test
+        run: make smoke
+
+      - name: Self-test
+        run: make selftest
+
+      - name: Validate the documents
+        if: always()
+        run: make documents
+
+      - name: Compatibility report
+        if: always()
+        run: |
+          if [ -f reports/selftest.json ]; then
+            python3 scripts/compat-report.py reports/selftest.json > reports/COMPATIBILITY.md
+            cat reports/COMPATIBILITY.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: selftest-${{ matrix.arch }}
+          path: reports/
+          if-no-files-found: warn

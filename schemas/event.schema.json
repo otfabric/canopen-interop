@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/otfabric/canopen-interop/schemas/event.schema.json",
+  "title": "canopen-interop event stream line",
+  "oneOf": [
+    {
+      "type": "object",
+      "title": "ready",
+      "required": [
+        "schemaVersion",
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "ready"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "bootup",
+      "required": [
+        "schemaVersion",
+        "type",
+        "node"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "bootup"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "heartbeat",
+      "required": [
+        "schemaVersion",
+        "type",
+        "node",
+        "state"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "heartbeat"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "state": {
+          "enum": [
+            "initialising",
+            "pre-operational",
+            "operational",
+            "stopped"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "emcy",
+      "required": [
+        "schemaVersion",
+        "type",
+        "node",
+        "code",
+        "register",
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "emcy"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{4}$"
+        },
+        "register": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{2}$"
+        },
+        "data": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2}){0,5}$"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "pdo",
+      "required": [
+        "schemaVersion",
+        "type",
+        "node",
+        "pdo",
+        "cobId",
+        "values"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "pdo"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "pdo": {
+          "type": "integer"
+        },
+        "cobId": {
+          "type": "string",
+          "pattern": "^0x[0-9A-F]{3,8}$"
+        },
+        "values": {
+          "type": "object",
+          "patternProperties": {
+            "^0x[0-9A-F]{4}:[0-9A-F]{2}$": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{2})*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "title": "cia402-state",
+      "required": [
+        "schemaVersion",
+        "type",
+        "node",
+        "state"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "type": {
+          "const": "cia402-state"
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "state": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "$ref": "result.schema.json"
+    },
+    {
+      "$ref": "error.schema.json"
+    }
+  ]
+}

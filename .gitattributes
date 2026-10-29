@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.tar.gz binary
+# EDS/DCF fixtures are kept byte for byte with CRLF line endings, as CiA 306 tools write them.
+fixtures/eds/* -text

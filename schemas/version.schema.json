@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/otfabric/canopen-interop/schemas/version.schema.json",
+  "title": "canopen-interop version document",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "adapter",
+    "upstream",
+    "repository",
+    "version",
+    "revision",
+    "license",
+    "stack",
+    "adapterVersion"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "adapter": {
+      "type": "string"
+    },
+    "upstream": {
+      "type": "string"
+    },
+    "repository": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "license": {
+      "type": "string"
+    },
+    "stack": {
+      "type": "string"
+    },
+    "adapterVersion": {
+      "type": "string"
+    }
+  }
+}

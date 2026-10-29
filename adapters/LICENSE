@@ -1,0 +1,4 @@
+The adapter programs in this directory are MIT-licensed like the rest of the
+repository (see ../LICENSE). The upstream stacks they drive are not part of
+this repository; the images fetch them at build time and keep them under
+their own licences (see ../THIRD_PARTY_NOTICES.md).

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/otfabric/canopen-interop/schemas/capabilities.schema.json",
+  "title": "canopen-interop capability document",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "adapter",
+    "operations",
+    "features"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "adapter": {
+      "type": "string"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "device",
+          "sdo-upload",
+          "sdo-download",
+          "nmt",
+          "listen",
+          "pdo-configure",
+          "pdo-receive",
+          "sync",
+          "eds-check",
+          "cia402"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "features": {
+      "type": "object",
+      "required": [
+        "sdoExpedited",
+        "sdoSegmented",
+        "sdoBlock",
+        "deviceSegmented",
+        "deviceBlock",
+        "heartbeatProducer",
+        "emcy",
+        "tick",
+        "deviceTpdo",
+        "deviceRpdo",
+        "deviceLimits",
+        "listenBootup",
+        "listenHeartbeat",
+        "listenEmcy",
+        "listenAllNodes",
+        "pdoConfigure",
+        "pdoReceive",
+        "sync",
+        "edsCheck",
+        "cia402"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sdoExpedited": {
+          "type": "boolean"
+        },
+        "sdoSegmented": {
+          "type": "boolean"
+        },
+        "sdoBlock": {
+          "type": "boolean"
+        },
+        "deviceSegmented": {
+          "type": "boolean"
+        },
+        "deviceBlock": {
+          "type": "boolean"
+        },
+        "heartbeatProducer": {
+          "type": "boolean"
+        },
+        "emcy": {
+          "type": "boolean"
+        },
+        "tick": {
+          "type": "boolean"
+        },
+        "deviceTpdo": {
+          "type": "boolean"
+        },
+        "deviceRpdo": {
+          "type": "boolean"
+        },
+        "deviceLimits": {
+          "type": "boolean"
+        },
+        "listenBootup": {
+          "type": "boolean"
+        },
+        "listenHeartbeat": {
+          "type": "boolean"
+        },
+        "listenEmcy": {
+          "type": "boolean"
+        },
+        "listenAllNodes": {
+          "type": "boolean"
+        },
+        "pdoConfigure": {
+          "type": "boolean"
+        },
+        "pdoReceive": {
+          "type": "boolean"
+        },
+        "sync": {
+          "type": "boolean"
+        },
+        "edsCheck": {
+          "type": "boolean"
+        },
+        "cia402": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
