@@ -8,7 +8,7 @@ run-name: "Upstream check (${{ github.event_name }})"
 # updated (with a comment when a new version shows up) and closed once every
 # pin is current. Pins are never changed here: a bump is a reviewed change
 # that rebuilds and self-tests the images. Shared steps:
-# https://github.com/otfabric/.github/tree/main/actions
+# https://github.com/otfabric/.github/tree/main/actions.1.1
 on:
   schedule:
     - cron: "7 0 * * *"
@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: otfabric/.github/actions/upstream-images@v2.1.0
+      - uses: otfabric/.github/actions/upstream-images@v2.1.0.1.1
 
   pins:
     name: Implementations
@@ -59,7 +59,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: otfabric/.github/actions/upstream-report@v2.1.0
+      - uses: otfabric/.github/actions/upstream-report@v2.1.0.1.1
         with:
           needs: ${{ toJSON(needs) }}
           notes: |
