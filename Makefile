@@ -56,6 +56,7 @@ ci: validate lint images smoke vcan selftest documents ## Full local CI on Linux
 
 validate: fixtures-check ## Check versions.yaml against the build inputs and the fixtures against their generator
 	@scripts/check-versions.sh
+	@python3 -m unittest discover -q -s scripts -p 'test_*.py'
 
 fixtures: ## Regenerate fixtures/eds from scripts/gen-eds-fixtures.py
 	@python3 scripts/gen-eds-fixtures.py
