@@ -38,7 +38,8 @@ it.
 Every result is `pass`, `fail`, `known` (a failure listed in
 [tests/known-differences.tsv](tests/known-differences.tsv)) or `skip` (a
 capability the stack lacks, with the reason). Reports: `reports/selftest.json`,
-`reports/selftest.md`, every document in `reports/documents/` (validated by
+`reports/results.json` (interop-result-v1: a run with no pass, or with a
+known difference that no longer reproduces, fails), `reports/selftest.md`, every document in `reports/documents/` (validated by
 `make documents` against `schemas/`); `scripts/compat-report.py` renders
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 

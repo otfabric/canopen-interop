@@ -36,8 +36,9 @@ interface and checks the documents of docs/CONTAINER_CONTRACT.md:
 Selection is capability driven: a pair or scenario an adapter cannot do is
 recorded as "skip" with the reason, never as "pass". A failure listed in
 tests/known-differences.tsv is reported as "known", never as "pass". Results
-go to <reports>/selftest.json and <reports>/selftest.md; the exit status is 1
-when a scenario failed.
+go to <reports>/selftest.json, <reports>/selftest.md and <reports>/results.json
+(the organisation's interop-result-v1); the exit status is 1 when a scenario
+failed, a known difference no longer reproduces, or nothing passed.
 
 Environment:
   DOCKER            docker command (default "docker"; e.g. "sudo docker")
@@ -58,6 +59,7 @@ import fnmatch
 import json
 import os
 import queue
+import re
 import shlex
 import subprocess
 import sys
@@ -65,6 +67,8 @@ import tempfile
 import threading
 import time
 import uuid
+
+import interop_result
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALL_ADAPTERS = ["canopennode", "lely", "pythoncanopen"]
@@ -84,7 +88,8 @@ HELPER_ORDER = ["pythoncanopen", "canopennode", "lely"]
 
 results = []
 DOCS = {}   # adapter -> every JSON document its containers printed
-KNOWN = []  # (suite, scenario, master, device, explanation)
+KNOWN = []  # the lines of tests/known-differences.tsv
+REPRODUCED = {}  # waiver id -> did it reproduce, for waivers that ran
 
 
 def keep(adapter, docs):
@@ -101,26 +106,30 @@ def load_known():
         if not line.strip() or line.startswith("#"):
             continue
         f = line.rstrip("\n").split("\t")
-        if len(f) < 5:
-            raise SystemExit("tests/known-differences.tsv: want 5 columns: %r" % line)
-        KNOWN.append(tuple(f[:5]))
+        if len(f) != 9:
+            raise SystemExit("tests/known-differences.tsv: want 9 columns: %r" % line)
+        KNOWN.append(dict(zip(("id", "suite", "scenario", "master", "device", "scope", "upstream_version", "evidence", "why"), f)))
 
 
 def known(suite, scenario, master, device):
-    for s, sc, m, d, why in KNOWN:
-        if s == suite and fnmatch.fnmatch(scenario, sc) and fnmatch.fnmatch(master or "-", m) \
-                and fnmatch.fnmatch(device or "-", d):
-            return why
+    for k in KNOWN:
+        if k["suite"] == suite and fnmatch.fnmatch(scenario, k["scenario"]) and fnmatch.fnmatch(master or "-", k["master"]) \
+                and fnmatch.fnmatch(device or "-", k["device"]):
+            return k
     return None
 
 
 def record(suite, scenario, status, detail="", master="", device="", duration=0.0):
-    if status == "fail":
-        why = known(suite, scenario, master, device)
-        if why:
-            status, detail = "known", "%s [known: %s]" % (detail, why)
+    waiver = known(suite, scenario, master, device) if status in ("fail", "pass") else None
+    if waiver and status == "fail":
+        status, detail = "known", "%s [known: %s]" % (detail, waiver["why"])
+        REPRODUCED[waiver["id"]] = True
+    elif waiver:
+        REPRODUCED.setdefault(waiver["id"], False)
     r = {"suite": suite, "scenario": scenario, "master": master, "device": device,
          "status": status, "detail": detail, "seconds": round(duration, 2)}
+    if status == "known":
+        r["waiver"] = waiver["id"]
     results.append(r)
     pair = (master + " -> " + device) if master or device else ""
     print("%-5s %-5s %-30s %-30s %s" % (status.upper(), suite, scenario, pair, detail[:200]), flush=True)
@@ -1211,6 +1220,43 @@ def suite_cdcf(caps):
 
 # ── report ──────────────────────────────────────────────────────────────────
 
+OUTCOME = {"pass": "pass", "fail": "fail", "known": "known-difference", "skip": "unsupported"}
+
+
+def result_document(caps, versions, started):
+    """The run as interop-result-v1. A skip is "unsupported": selection is
+    capability driven, so a skip always means a stack lacks the capability."""
+    docs = []
+    for r in results:
+        roles = {k: r[k] for k in ("master", "device") if r[k]} or {"harness": "selftest"}
+        res = {"id": re.sub(r"[^a-z0-9._-]+", "-", "%s.%s" % (r["suite"], r["scenario"].lower())), "title": r["scenario"],
+               "suite": r["suite"], "roles": roles, "outcome": OUTCOME[r["status"]], "durationMs": int(r["seconds"] * 1000)}
+        if r["status"] != "pass":
+            res["reason"] = r["detail"] or r["status"]
+        if r.get("waiver"):
+            res["waiver"] = r["waiver"]
+        docs.append(res)
+    implementations = []
+    for a in sorted(caps):
+        v = versions.get(a, {})
+        i = {"name": a, "version": str(v.get("version") or "unknown"), "independent": True}
+        for key in ("upstream", "revision"):
+            if v.get(key):
+                i[key] = str(v[key])
+        digest = interop_result.repo_digest(image(a), DOCKER)
+        if digest:
+            i["image"] = digest
+        implementations.append(i)
+    return {"schemaVersion": "1.0", "repository": "otfabric/canopen-interop",
+            "interopVersion": interop_result.version_field(ROOT, "interop_version"),
+            "contractVersion": interop_result.version_field(ROOT, "contract_version"),
+            "gitSha": interop_result.git_sha(ROOT), "startedAt": started, "finishedAt": interop_result.now(),
+            "host": interop_result.host(), "implementations": implementations or [{"name": "none", "version": "none"}],
+            "waivers": [{"id": k["id"], "scope": k["scope"], "evidence": k["evidence"], "reproduced": REPRODUCED[k["id"]]}
+                        for k in KNOWN if k["id"] in REPRODUCED],
+            "reproduce": shlex.join(["python3", "scripts/selftest.py"] + sys.argv[1:]), "results": docs}
+
+
 def report(caps, outdir, started):
     os.makedirs(outdir, exist_ok=True)
     counts = {}
@@ -1244,7 +1290,12 @@ def report(caps, outdir, started):
             f.write("| %s | %s | %s | %s | %s | %s |\n" % (r["suite"], r["scenario"], r["master"], r["device"],
                                                           r["status"], r["detail"].replace("|", "\\|")[:200]))
     print("\n%s  (reports in %s)" % (", ".join("%d %s" % (v, k) for k, v in sorted(counts.items())), outdir))
-    return counts.get("fail", 0)
+    document = result_document(caps, versions, started)
+    interop_result.write(os.path.join(outdir, "results.json"), document)
+    problems = interop_result.problems(document)
+    for p in problems:
+        print("FAIL %s" % p)
+    return len(problems)
 
 
 def main():
