@@ -6,7 +6,7 @@ Independent CANopen implementations (CANopenNode, Lely, python-canopen) in conta
 
 ## Organisation standards
 
-This repository follows **otfabric/engineering policy 1.0**, profile **interoperability** (`.otfabric/policy.yaml`, mode `baseline`; exceptions in `.otfabric/exceptions.yaml`). Where this file and the organisation standards disagree, this file wins here — say so in your report.
+This repository follows **otfabric/engineering policy 1.1**, profile **interoperability** (`.otfabric/policy.yaml`, mode `enforce`; exceptions in `.otfabric/exceptions.yaml`). Where this file and the organisation standards disagree, this file wins here — say so in your report.
 
 ## Where the truth lives
 
