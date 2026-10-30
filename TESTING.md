@@ -48,4 +48,5 @@ capability the stack lacks, with the reason). Reports: `reports/selftest.json`,
 arm64 runner every image built natively, the smoke test, the whole self-test
 on vcan and the document validation; the compatibility report is the job
 summary. `release.yml` repeats this on a tag and pushes what it tested.
-`upstream.yml` compares the pins with the latest upstream releases weekly.
+`upstream.yml` compares the pins (and the base-image digests) with the latest
+upstream daily and keeps an issue open while one is behind.

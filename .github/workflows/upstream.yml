@@ -1,56 +1,71 @@
 name: Upstream
-run-name: "Upstream pin check (${{ github.event_name }})"
+run-name: "Upstream check (${{ github.event_name }})"
 
-# Compares the pins of versions.yaml with the latest upstream releases (PyPI,
-# GitHub, GitLab) and the base image tags with their current digests
-# (scripts/latest-upstream.py). When a pin is behind, the issue "Upstream
-# releases: pins behind the latest" is opened, or updated, with the table;
-# it is closed when every pin is current again. Pins are never changed here:
-# a bump is a reviewed change that rebuilds and self-tests the images.
-
+# Daily check of every pin against the latest upstream: the releases of
+# versions.yaml (PyPI, GitHub, GitLab; scripts/latest-upstream.py) and the
+# digest of every base image. The table goes to the Job Summary and to the
+# issue "Upstream releases: pins behind the latest", which is opened or
+# updated (with a comment when a new version shows up) and closed once every
+# pin is current. Pins are never changed here: a bump is a reviewed change
+# that rebuilds and self-tests the images. Shared steps:
+# https://github.com/otfabric/.github/tree/main/actions
 on:
   schedule:
-    - cron: "23 6 * * 1"
+    - cron: "7 0 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
+
+concurrency:
+  group: upstream
+  cancel-in-progress: false
 
 env:
   BASE_REGISTRY: mirror.gcr.io/library
-  TITLE: "Upstream releases: pins behind the latest"
 
 jobs:
-  check:
-    name: Pins vs latest upstream
+  images:
+    name: Base images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: otfabric/.github/actions/upstream-images@main
+
+  pins:
+    name: Implementations
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
       - name: Compare
-        id: compare
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          scripts/latest-upstream.py --images --output table.md
-          cat table.md >> "$GITHUB_STEP_SUMMARY"
+        run: scripts/latest-upstream.py --rows "$RUNNER_TEMP/rows"
 
-      - name: Open, update or close the issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BEHIND: ${{ steps.compare.outputs.behind }}
-        run: |
-          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
-            --jq "[.[] | select(.title == env.TITLE)][0].number // empty")
-          if [ "${BEHIND:-0}" -gt 0 ]; then
-            { cat table.md; echo; echo "Checked by the [Upstream workflow]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). Bump a pin in its Dockerfile or requirements and versions.yaml, then let CI build and self-test it."; } > body.md
-            if [ -n "$number" ]; then
-              gh issue edit "$number" --body-file body.md
-            else
-              gh issue create --title "$TITLE" --body-file body.md
-            fi
-          elif [ -n "$number" ]; then
-            gh issue close "$number" --comment "Every pin is the latest upstream again."
-          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: upstream-row-implementations
+          path: ${{ runner.temp }}/rows
+
+  report:
+    name: Report
+    runs-on: ubuntu-latest
+    needs: [images, pins]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: otfabric/.github/actions/upstream-report@main
+        with:
+          needs: ${{ toJSON(needs) }}
+          notes: |
+            ### To update
+
+            - **Implementation:** bump the pin in its Dockerfile or requirements and in
+              `versions.yaml`, then let CI build and self-test it.
+            - **Base image:** replace the digest in `versions.yaml` and in every Dockerfile that
+              pins it.

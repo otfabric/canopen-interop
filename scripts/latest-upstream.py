@@ -8,10 +8,12 @@ GitHub releases) or the newest GitLab release, and for canopennode also the CANo
 commit and the newest CANopenEditor tag; for every base image: the digest its
 tag points to now (with --images, through `docker buildx imagetools
 inspect`). Writes a Markdown table to stdout (or --output) and, under GitHub
-Actions, `behind=<n>` to $GITHUB_OUTPUT. Never changes a pin: bumping is a
-reviewed change.
+Actions, `behind=<n>` to $GITHUB_OUTPUT. With --rows, also one JSON row per
+pin in the format of otfabric/.github/actions/upstream-row (the Upstream
+workflow checks the base images with otfabric/.github/actions/upstream-images
+instead of --images). Never changes a pin: bumping is a reviewed change.
 
-    scripts/latest-upstream.py [--images] [--output table.md]
+    scripts/latest-upstream.py [--images] [--output table.md] [--rows DIR]
 """
 
 import argparse
@@ -108,31 +110,39 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", action="store_true", help="also check the base image digests (needs docker)")
     ap.add_argument("--output")
+    ap.add_argument("--rows", help="write one JSON row per pin into this directory")
     args = ap.parse_args()
     impls, images = parse_versions()
-    rows, behind = [], 0
+    rows, records, behind = [], [], 0
 
-    def compare(name, pinned, fetch, same=lambda a, b: norm(a) == norm(b)):
+    def record(name, kind, source, pinned, latest, status, detail=""):
+        records.append({"component": name, "kind": kind, "source": source, "pinned": pinned,
+                        "latest": latest, "status": status, "detail": detail, "test_outcome": "",
+                        "test_result": "", "test_cached": False, "known": ""})
+
+    def compare(name, pinned, fetch, same=lambda a, b: norm(a) == norm(b), kind="library"):
         nonlocal behind
         try:
             latest, source = fetch()
         except Exception as e:  # report, do not fail the whole check
             rows.append((name, pinned, "?", "error: %s" % e))
+            record(name, kind, "", pinned, "", "error", str(e)[-160:])
             return
         ok = same(latest, pinned)
         if not ok:
             behind += 1
         rows.append((name, pinned, latest, "up to date" if ok else "behind (%s)" % source))
+        record(name, kind, source, pinned, latest, "current" if ok else "behind")
 
     for name, impl in sorted(impls.items()):
         compare(name, impl.get("version", ""), lambda impl=impl: latest_of(impl))
         if impl.get("canopenlinux_revision"):
             compare("canopennode: CANopenLinux master", impl["canopenlinux_revision"][:12],
                     lambda impl=impl: (head_of(impl["canopenlinux_repository"])[:12], "master commit"),
-                    lambda a, b: a == b)
+                    lambda a, b: a == b, kind="commit")
         if impl.get("canopeneditor_version"):
             compare("canopennode: CANopenEditor", impl["canopeneditor_version"],
-                    lambda impl=impl: (newest_tag(impl["canopeneditor_repository"]), "tag"))
+                    lambda impl=impl: (newest_tag(impl["canopeneditor_repository"]), "tag"), kind="tool")
     if args.images:
         for name, ref in sorted(images.items()):
             pinned = ref.split("@")[-1][:19] + "…"
@@ -149,6 +159,12 @@ def main():
     table = "| Component | Pinned | Latest | Status |\n|---|---|---|---|\n" + \
         "".join("| %s | %s | %s | %s |\n" % r for r in rows)
     text = "%d pin(s) behind the latest upstream.\n\n%s" % (behind, table)
+    if args.rows:
+        os.makedirs(args.rows, exist_ok=True)
+        for r in records:
+            name = re.sub(r"[^A-Za-z0-9._-]+", "-", r["component"]).strip("-").lower()
+            with open(os.path.join(args.rows, "row-%s.json" % name), "w") as f:
+                json.dump(r, f)
     if args.output:
         with open(args.output, "w") as f:
             f.write(text)
