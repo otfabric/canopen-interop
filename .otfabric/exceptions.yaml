@@ -1,0 +1,14 @@
+# Recorded exceptions to otfabric/engineering rules (docs/exceptions/ there).
+exceptions:
+  - rule: CI-003
+    scope: .github/workflows/upstream.yml
+    justification: >-
+      The shared composite actions otfabric/.github/actions/upstream-images
+      and upstream-report have no release tags yet, so @main is the only
+      ref they can be used with. The upstream workflow only reports pins
+      behind upstream (it never changes a pin), which limits the impact of
+      a mutable ref.
+    owner: bartvanbos
+    reviewed: "2026-10-30"
+    reconsider: "when otfabric/.github tags its composite actions (proposal step 5: @v1)"
+    ref: https://github.com/otfabric/engineering/blob/main/docs/adoption/github-actions-proposal.md
