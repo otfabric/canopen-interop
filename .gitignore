@@ -4,3 +4,9 @@ reports/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Build artefacts live in /bin/ and /release/ (otfabric/engineering REPO-005)
+/bin/
+/release/
+*.test
+coverage.out
