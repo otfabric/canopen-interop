@@ -6,6 +6,18 @@ versions.yaml: the Release workflow builds and self-tests every image
 natively on amd64 and arm64, pushes `<image>:vX.Y.Z-<arch>`, joins them into
 the multi-arch `<image>:vX.Y.Z` and publishes the release with the digests.
 
+## v0.3.0
+
+**Date:** 2026-10-31
+**Previous release:** v0.2.0
+
+### Added
+
+- Adds `results.json` in the interop-result-v1 format.
+- Policy 1.2: build output in `bin/` and `release/`, and shared CI at v3.3.0.
+
+---
+
 ## v0.2.0
 
 **Date:** 2026-10-29

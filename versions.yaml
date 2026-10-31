@@ -3,7 +3,7 @@
 # The Dockerfiles and adapters/*/requirements.txt are the source of truth for
 # a build: scripts/check-versions.sh fails when this file disagrees with them.
 
-interop_version: "0.2.0"
+interop_version: "0.3.0"
 contract_version: "1.1"          # docs/CONTAINER_CONTRACT.md; documents carry schemaVersion "1.0" (the 1.x line)
 fixture_schema: "1.1"            # fixtures/eds (CiA 306 EDS/DCF), docs/FIXTURES.md; 1.1 adds 0x1007, LSS_Supported=1 and two fixtures
 
