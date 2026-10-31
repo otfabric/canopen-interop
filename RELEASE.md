@@ -1,8 +1,9 @@
 # Releases
 
 Each section is the body of its GitHub release (`scripts/release-notes.sh`).
-A release is a pushed tag `vX.Y.Z` equal to `interop_version` in
-versions.yaml: the Release workflow builds and self-tests every image
+A release is a tag `vX.Y.Z` equal to `interop_version` in versions.yaml. Run
+the Release workflow on `main` and pick the bump (`patch` by default, `minor`
+or `major`), or push the tag: it builds and self-tests every image
 natively on amd64 and arm64, pushes `<image>:vX.Y.Z-<arch>`, joins them into
 the multi-arch `<image>:vX.Y.Z` and publishes the release with the digests.
 

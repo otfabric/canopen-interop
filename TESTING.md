@@ -48,6 +48,6 @@ known difference that no longer reproduces, fails), `reports/selftest.md`, every
 `.github/workflows/ci.yml`: validate and lint, then on an amd64 and an
 arm64 runner every image built natively, the smoke test, the whole self-test
 on vcan and the document validation; the compatibility report is the job
-summary. `release.yml` repeats this on a tag and pushes what it tested.
+summary. `release.yml` repeats this for a release and pushes what it tested.
 `upstream.yml` compares the pins (and the base-image digests) with the latest
 upstream daily and keeps an issue open while one is behind.

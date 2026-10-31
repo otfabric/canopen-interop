@@ -1,10 +1,27 @@
 name: Release
-run-name: "Release ${{ github.ref_name }}"
+run-name: "Release ${{ inputs.bump && format('({0}) from {1}', inputs.bump, github.ref_name) || github.ref_name }}"
 
+# Tag push: publish that tag. Manual run: bump the latest vX.Y.Z tag (patch by
+# default) and publish that from main; the git tag is created with the GitHub
+# release, its last step, so a failed run leaves no tag behind.
 on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver component to increment from the latest vX.Y.Z tag
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write   # create the GitHub release
@@ -14,14 +31,59 @@ env:
   REGISTRY: ghcr.io/otfabric
   BASE_REGISTRY: mirror.gcr.io/library
   TOOLS_REGISTRY: mirror.gcr.io
-  VERSION: ${{ github.ref_name }}
 
 jobs:
+  # The tag to release. Fails before anything is built when the commit is not
+  # ready for it: versions.yaml and RELEASE.md must already name that version.
+  version:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve tag
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ "${REF_NAME}" != "${DEFAULT_BRANCH}" ]; then
+              echo "::error::Releases are only allowed from ${DEFAULT_BRANCH}, not ${REF_NAME}"
+              exit 1
+            fi
+            tag="$(scripts/next-version.sh "${BUMP}")"
+            if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+              echo "::error::tag ${tag} already exists"
+              exit 1
+            fi
+          else
+            tag="${REF_NAME}"
+          fi
+          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "::error::${tag} is not vX.Y.Z"; exit 1; }
+          grep -qF "interop_version: \"${tag#v}\"" versions.yaml \
+            || { echo "::error::versions.yaml does not say interop_version: \"${tag#v}\""; exit 1; }
+          scripts/release-notes.sh "${tag}" > /dev/null \
+            || { echo "::error::RELEASE.md has no notes for ${tag}"; exit 1; }
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "releasing ${tag} (from ${EVENT_NAME})"
+
   # One job per architecture on a runner of that architecture: every image is
   # built natively and self-tested on vcan, and exactly the tested images are
   # pushed as <image>:<version>-<arch>.
   build:
     name: Build, test, push (${{ matrix.arch }})
+    needs: version
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -32,6 +94,8 @@ jobs:
             runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -71,7 +135,7 @@ jobs:
           scripts/retry.sh scripts/ghcr-login.sh "${{ github.actor }}" "${RUNNER_TEMP}/ghcr-token"
           rm -f "${RUNNER_TEMP}/ghcr-token"
 
-      - name: Push the tested images as ${{ github.ref_name }}-${{ matrix.arch }}
+      - name: Push the tested images as ${{ needs.version.outputs.tag }}-${{ matrix.arch }}
         run: make publish-arch ARCH=${{ matrix.arch }}
 
   # Joins the per-architecture images into the multi-arch tag and publishes
@@ -80,7 +144,9 @@ jobs:
     name: Multi-arch manifest and release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: build
+    needs: [version, build]
+    env:
+      VERSION: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
 
@@ -92,7 +158,7 @@ jobs:
           scripts/retry.sh scripts/ghcr-login.sh "${{ github.actor }}" "${RUNNER_TEMP}/ghcr-token"
           rm -f "${RUNNER_TEMP}/ghcr-token"
 
-      - name: Create ${{ github.ref_name }} from the amd64 and arm64 images
+      - name: Create ${{ needs.version.outputs.tag }} from the amd64 and arm64 images
         run: make publish-manifest
 
       - name: Digests and manifest.json
@@ -126,6 +192,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           body_path: notes.md
           files: |
             manifest.json
