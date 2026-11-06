@@ -19,9 +19,16 @@ Each image carries this file and [licenses/](licenses) in
 | pythoncanopen | canopen 2.4.1 | MIT | [MIT](licenses/canopen-MIT.txt) | Installed from PyPI as Python source; https://github.com/christiansandberg/canopen/tree/v2.4.1 |
 | pythoncanopen | python-can 4.6.1 | LGPL-3.0-only | [LGPL-3.0](licenses/python-can-LGPL-3.0.txt), [GPL-3.0](licenses/python-can-GPL-3.0.txt) | Installed from PyPI as Python source; https://github.com/hardbyte/python-can/tree/v4.6.1 |
 | pythoncanopen | packaging, typing_extensions, wrapt (python-can dependencies) | Apache-2.0 OR BSD-2-Clause, PSF-2.0, BSD-2-Clause | in the image (`site-packages/*.dist-info`) | PyPI |
-| all | Debian bookworm base system, CPython 3.12 (official `python` and `debian` images) | Debian package licences (`/usr/share/doc/*/copyright`), PSF-2.0 | in the image | https://hub.docker.com/_/debian, https://hub.docker.com/_/python |
+| otfabric | go-canopen (latest release when the image is built), go-canbus | MIT | in the image: `/licenses/<module>/` and `/licenses/BUNDLED-MODULES.txt` | https://github.com/otfabric/go-canopen, https://github.com/otfabric/go-canbus |
+| otfabric | Go standard library 1.27.2 | BSD-3-Clause | `/licenses/go/LICENSE` | https://go.dev |
+| otfabric | Debian trixie-slim base system (official `debian` image) | Debian package licences (`/usr/share/doc/*/copyright`) | in the image | https://hub.docker.com/_/debian |
+| all others | Debian bookworm base system, CPython 3.12 (official `python` and `debian` images) | Debian package licences (`/usr/share/doc/*/copyright`), PSF-2.0 | in the image | https://hub.docker.com/_/debian, https://hub.docker.com/_/python |
 
 The adapters start the upstream programs (`canopend`) or link the upstream
 libraries (`lely-coi` links lely-core dynamically) or import them at run
 time (python canopen); they are separate MIT-licensed programs using the
 upstreams' public interfaces.
+
+The `otfabric` image ([own/go-canopen](own/go-canopen/README.md)) is OT
+Fabric's own stack, not a reference and not part of a release; it carries its
+licence texts in `/licenses`, not in `/usr/share/doc/canopen-interop/`.

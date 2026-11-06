@@ -1,0 +1,199 @@
+name: Own stack (go-canopen)
+run-name: "Build canopen-interop-otfabric from the latest go-canopen, by @${{ github.actor }} on ${{ github.ref_name }}"
+
+# Manual only. Builds ghcr.io/otfabric/canopen-interop-otfabric from the latest
+# go-canopen release, tests it with the self-tests and references of the latest
+# harness release and, when run from main, publishes it as :<go-canopen version>
+# and :latest.
+#
+# Nothing is committed, and nothing else waits for this: no pin to bump, no
+# release, no schedule. So no release loop can form (own/go-canopen/README.md).
+# The harness Release workflow and manifest.json do not contain this image.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: own-go-canopen
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/otfabric/canopen-interop-otfabric
+  BASE_REGISTRY: mirror.gcr.io/library
+
+jobs:
+  version:
+    name: Resolve versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      upstream: ${{ steps.version.outputs.upstream }}
+      revision: ${{ steps.version.outputs.revision }}
+      harness: ${{ steps.version.outputs.harness }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: version
+        name: The latest go-canopen, and the harness release to test against
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+        run: |
+          upstream=$(git ls-remote --tags --refs https://github.com/otfabric/go-canopen.git 'v[0-9]*' \
+            | sed 's,.*refs/tags/,,' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          [ -n "${upstream}" ] || { echo "::error::no go-canopen release found"; exit 1; }
+          # An annotated tag has a peeled line, with the commit.
+          revision=$(git ls-remote --tags https://github.com/otfabric/go-canopen.git "refs/tags/${upstream}^{}" | cut -f1)
+          [ -n "${revision}" ] || revision=$(git ls-remote --tags https://github.com/otfabric/go-canopen.git "refs/tags/${upstream}" | cut -f1)
+          harness=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+          [ -n "${harness}" ] || { echo "::error::no harness release found"; exit 1; }
+          if [ "${REF}" = "main" ]; then publish="yes: ${IMAGE}:${upstream} and ${IMAGE}:latest"; else publish="no: not run from main"; fi
+          {
+            echo "upstream=${upstream}"
+            echo "revision=${revision}"
+            echo "harness=${harness}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Versions"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| go-canopen (latest release) | \`${upstream}\` |"
+            echo "| go-canopen commit | \`${revision}\` |"
+            echo "| Image tag | \`${upstream}\` |"
+            echo "| Reference images (latest harness release) | \`${harness}\` |"
+            echo "| This repository | \`${REF}\` at \`${SHA}\` |"
+            echo "| Publish | ${publish} |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build, test (${{ matrix.arch }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.version.outputs.harness }}
+      UPSTREAM: ${{ needs.version.outputs.upstream }}
+      REVISION: ${{ needs.version.outputs.revision }}
+      ADAPTER_IMAGE_otfabric: ghcr.io/otfabric/canopen-interop-otfabric:ci
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema
+
+      - name: Build from go-canopen ${{ needs.version.outputs.upstream }}
+        run: |
+          scripts/retry.sh docker build --progress=plain --build-arg BASE_REGISTRY="${BASE_REGISTRY}" \
+            --build-arg UPSTREAM_VERSION="${UPSTREAM}" --build-arg UPSTREAM_SHA="${REVISION}" \
+            --build-arg ADAPTER_VERSION="${UPSTREAM}" \
+            --tag "${ADAPTER_IMAGE_otfabric}" --file own/go-canopen/Dockerfile .
+
+      - name: What was built
+        run: |
+          reported=$(docker run --rm "${ADAPTER_IMAGE_otfabric}" print-capabilities | jq -r '.upstream.version')
+          {
+            echo "## ${{ matrix.arch }}"
+            echo
+            docker run --rm "${ADAPTER_IMAGE_otfabric}" print-version | jq -r '"- `\(.stack)`, adapter \(.adapterVersion)"'
+            docker run --rm "${ADAPTER_IMAGE_otfabric}" print-capabilities | jq -r '"- upstream \(.upstream.name) \(.upstream.version), commit `\(.upstream.revision)`, independent engine: \(.upstream.independentEngine)"'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "${reported}" = "${UPSTREAM}" ] || { echo "::error::the image reports go-canopen ${reported}, want ${UPSTREAM}"; exit 1; }
+
+      # The self-tests are those of the harness release whose reference images
+      # they run against: main's scripts may already check what only the next
+      # release's references do.
+      - name: Check out the self-tests of ${{ needs.version.outputs.harness }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.harness }}
+          path: harness
+
+      # CANopen runs on SocketCAN: the runner's kernel gets the CAN modules
+      # and a vcan interface, as in ci.yml.
+      - name: Load the CAN modules and create vcan0
+        run: scripts/ci-can-modules.sh && sudo scripts/setup-vcan.sh vcan0
+
+      - name: Pull the reference images of ${{ needs.version.outputs.harness }}
+        run: |
+          for a in canopennode lely pythoncanopen; do
+            scripts/retry.sh docker pull --quiet "ghcr.io/otfabric/canopen-interop-${a}:${VERSION}"
+            docker run --rm "ghcr.io/otfabric/canopen-interop-${a}:${VERSION}" print-version \
+              | jq -r --arg image "${a}:${VERSION}" '"- \($image): \(.upstream) \(.version)"' | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Smoke, cross-stack self-test against the references, document schemas
+        working-directory: harness
+        run: |
+          set -o pipefail
+          mkdir -p reports
+          REPORTS=reports scripts/smoke.sh otfabric | tee reports/smoke.log
+          VCAN=vcan0 REPORT_DIR=reports scripts/interop.sh otfabric canopennode lely pythoncanopen 2>&1 | tee reports/interop.log
+          python3 scripts/validate-documents.py reports
+          { cat reports/smoke.log; tail -n 3 reports/interop.log; } | tee -a "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload documents
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: own-go-canopen-documents-${{ matrix.arch }}
+          path: |
+            harness/reports/
+            reports/
+          if-no-files-found: ignore
+
+      - name: Push the tested image as <version>-<arch>
+        if: github.ref == 'refs/heads/main'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCH: ${{ matrix.arch }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${ACTOR}" --password-stdin
+          docker tag "${ADAPTER_IMAGE_otfabric}" "${IMAGE}:${UPSTREAM}-${ARCH}"
+          scripts/retry.sh docker push --quiet "${IMAGE}:${UPSTREAM}-${ARCH}"
+
+  publish:
+    name: Publish ${{ needs.version.outputs.upstream }} and latest
+    needs: [version, build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      UPSTREAM: ${{ needs.version.outputs.upstream }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Join the architectures
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${ACTOR}" --password-stdin
+          scripts/retry.sh docker buildx imagetools create --tag "${IMAGE}:${UPSTREAM}" --tag "${IMAGE}:latest" \
+            "${IMAGE}:${UPSTREAM}-amd64" "${IMAGE}:${UPSTREAM}-arm64"
+          digest=$(scripts/retry.sh docker buildx imagetools inspect "${IMAGE}:${UPSTREAM}" --format '{{.Manifest.Digest}}')
+          {
+            echo "## Published"
+            echo
+            echo "- \`${IMAGE}:${UPSTREAM}\`"
+            echo "- \`${IMAGE}:latest\`"
+            echo "- \`${IMAGE}@${digest}\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

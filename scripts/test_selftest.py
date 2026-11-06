@@ -53,6 +53,17 @@ class Results(unittest.TestCase):
         st.record("eds", "x.eds", "pass", "", "", "")
         self.assertEqual(self.document()["results"][0]["roles"], {"harness": "selftest"})
 
+    def test_independent_comes_from_the_image(self):
+        caps = {"lely": {}, "own": {"upstream": {"name": "x", "version": "1", "independentEngine": False}}}
+        with mock.patch.object(interop_result, "repo_digest", return_value=None):
+            doc = st.result_document(caps, {"lely": {"version": "1"}, "own": {"version": "1"}}, "2026-11-06T00:00:00Z")
+        self.assertEqual({i["name"]: i["independent"] for i in doc["implementations"]}, {"lely": True, "own": False})
+
+    def test_an_image_override_names_one_adapter(self):
+        with mock.patch.dict(os.environ, {"ADAPTER_IMAGE_some_stack": "example.org/x:1"}):
+            self.assertEqual(st.image("some-stack"), "example.org/x:1")
+            self.assertEqual(st.image("lely"), st.TEMPLATE.format(adapter="lely"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,7 @@ IMAGE_TEMPLATE = $(REGISTRY)/canopen-interop-{adapter}:$(VERSION)
 
 export REGISTRY VERSION
 
-.PHONY: help ci validate lint images smoke selftest documents vcan fixtures fixtures-check \
+.PHONY: help all ci validate lint images smoke interop selftest documents vcan fixtures fixtures-check \
 	print-adapters print-published-adapters capabilities buildx-setup buildx publish publish-arch publish-manifest \
 	digests release-notes clean FORCE
 FORCE:
@@ -48,7 +48,9 @@ FORCE:
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_%-]+:.*?## / {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-ci: validate lint images smoke vcan selftest documents ## Full local CI on Linux: validate, lint, build, smoke, self-test, validate documents
+all: validate images ## Validate and build the local images
+
+ci: validate lint images smoke vcan interop documents ## Full local CI on Linux: validate, lint, build, smoke, self-test, validate documents
 	@echo ""
 	@echo "All local CI checks passed."
 
@@ -102,9 +104,10 @@ smoke: ## Contract smoke test of every adapter (no CAN interface needed)
 vcan: ## Load the CAN modules and create $(VCAN) (needs root through ADMIN)
 	@$(ADMIN) scripts/setup-vcan.sh $(VCAN)
 
-selftest: ## Reference-to-reference self-test of all suites on vcan (Linux; make vcan first)
-	@DOCKER="$(DOCKER)" IMAGE_TEMPLATE='$(IMAGE_TEMPLATE)' ADAPTERS="$(ADAPTERS)" VCAN=$(VCAN) \
-		python3 scripts/selftest.py --reports reports
+interop: ## Cross-stack self-test of all suites between ADAPTERS on vcan (Linux; make vcan first)
+	@DOCKER="$(DOCKER)" VCAN=$(VCAN) REPORT_DIR=reports scripts/interop.sh $(ADAPTERS)
+
+selftest: interop ## The same as interop
 
 selftest-%: FORCE ## One suite of the self-test: selftest-od, -sdo, -nmt, -emcy, -pdo, -eds, -rpdo, -lss, -mpdo, -boot, -cdcf (eds, cdcf need no CAN)
 	@DOCKER="$(DOCKER)" IMAGE_TEMPLATE='$(IMAGE_TEMPLATE)' ADAPTERS="$(ADAPTERS)" SUITES=$* VCAN=$(VCAN) \

@@ -64,6 +64,13 @@ for name, impl in v["implementations"].items():
         need(df, "UPSTREAM_VERSION=" + impl["version"], "version")
         need(df, "LELY_SHA256=" + impl["source_sha256"], "source hash")
 
+for name, impl in v.get("own_implementations", {}).items():
+    df = impl["build"] + "/Dockerfile"
+    for arg, base in (("GOLANG_DIGEST", "golang"), ("DEBIAN_DIGEST", "debian-trixie")):
+        ref = bases[base]
+        need(df, "ARG %s=%s" % (arg, ref.split("@")[1]), "base image " + base)
+        need(df, "/" + ref.split("@")[0] + "@${%s}" % arg, "base image " + base)
+
 if errors:
     print("versions.yaml disagrees with the build inputs:")
     for e in errors:

@@ -2,7 +2,7 @@
 
 ## What this is
 
-Independent CANopen implementations (CANopenNode, Lely, python-canopen) in containers behind one command-line contract, with deterministic EDS/DCF fixtures, used as oracles by go-canopen and canopenctl. Nothing here depends on go-canopen. Profile: **interoperability**.
+Independent CANopen implementations (CANopenNode, Lely, python-canopen) in containers behind one command-line contract, with deterministic EDS/DCF fixtures, used as oracles by go-canopen and canopenctl. Nothing here depends on go-canopen, except `own/go-canopen/` and `.github/workflows/own-go-canopen.yml`: OT Fabric's own stack as image `canopen-interop-otfabric` (adapter `otfabric`, not independent, not in a release; REQUIREMENTS.md R1, ADR-0012). Profile: **interoperability**.
 
 ## Organisation standards
 
