@@ -5,13 +5,20 @@
 On Linux with the CAN modules (Ubuntu: `linux-modules-extra-$(uname -r)`):
 
 ```sh
-make ci                       # validate lint images smoke vcan selftest documents
+make ci                       # validate lint images smoke vcan interop documents
+make interop ADAPTERS="lely pythoncanopen"   # scripts/interop.sh: the self-test between these adapters
 make selftest-sdo             # one suite: od sdo nmt emcy pdo eds rpdo lss mpdo boot cdcf
 make smoke ADAPTERS=lely      # one adapter
 ```
 
 On macOS/Docker Desktop there is no CAN: `make validate lint images smoke
-selftest-eds`. A Linux VM with vcan (e.g. Lima) runs everything.
+selftest-eds`. A Linux VM with vcan (e.g. Lima) runs everything, also OT
+Fabric's own image (`own/go-canopen/README.md`):
+
+```sh
+make -f own/go-canopen/Makefile image smoke                 # also on macOS
+make -f own/go-canopen/Makefile interop VCAN=vcan0          # in the VM: otfabric against the latest release's references
+```
 
 `VCAN=<ifc>` selects another interface. The self-test needs the interface to
 itself: other CANopen traffic (another device with node-ID 5 or 9) disturbs

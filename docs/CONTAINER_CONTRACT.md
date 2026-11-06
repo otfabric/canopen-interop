@@ -1,6 +1,6 @@
 # Container contract
 
-Version: **1.1** (`contract_version` in [versions.yaml](../versions.yaml))
+Version: **1.2** (`contract_version` in [versions.yaml](../versions.yaml))
 
 Every adapter image exposes the same commands, flags, JSON documents and exit
 codes. Consumers (go-canopen's interop suite, this repository's self-test)
@@ -13,12 +13,13 @@ compatible line and changes only with the major version.
 |---------|--------|
 | 1.0 | First release (canopen-interop v0.1.0) |
 | 1.1 | Additions (canopen-interop v0.2.0): [`lss`](#lss) (LSS master, CiA 305), LSS slave devices (`device --node-id 255 --serial`, events `node-id` and `bit-rate`, `nodeId` in the device result), [`rpdo-send`](#rpdo-send) (RPDO sender, SYNC window), [`mpdo-send`/`mpdo-receive`](#mpdo-send--mpdo-receive) (DAM/SAM-MPDO), [`boot`](#boot) (CiA 302 boot-up with concise DCFs), [`cdcf`](#cdcf) (concise DCF generators); error fields `step` and `lssError`; 14 features. Documents still carry `"schemaVersion": "1.0"`. |
+| 1.2 | Addition (canopen-interop v0.4.0): optional `upstream` in the capability document (`name`, `version`, `revision`, `independentEngine`); absent means an independent implementation. The `otfabric` image (OT Fabric's own go-canopen, [own/go-canopen](../own/go-canopen/README.md)) declares `independentEngine: false`; the three references are unchanged. |
 
 ## Image layout
 
 | Item | Value |
 |------|-------|
-| Image | `ghcr.io/otfabric/canopen-interop-<adapter>` (`canopennode`, `lely`, `pythoncanopen`) |
+| Image | `ghcr.io/otfabric/canopen-interop-<adapter>` (`canopennode`, `lely`, `pythoncanopen`); OT Fabric's own stack, not a reference, is `ghcr.io/otfabric/canopen-interop-otfabric` (adapter name `otfabric`, tags are go-canopen versions) |
 | Entrypoint | `canopen-interop` |
 | Default command | `print-capabilities` |
 | Network | `--network host`: CAN interfaces are network devices of a network namespace, and ordinary Docker networks do not carry CAN. The harness creates `vcan` interfaces in the host namespace and runs every container in it. CAN raw sockets need no capability. |
@@ -380,6 +381,18 @@ Result `{"type":"result","operation":"cdcf","generator":"dcfgen","node":5,"size"
 
 A 1.0 consumer ignores the 1.1 features; every 1.1 image declares all of
 them.
+
+Contract 1.2 adds an optional `upstream` object, what the image says of the
+implementation behind it:
+
+```json
+"upstream":{"name":"go-canopen","version":"v0.4.1","revision":"<40 hex>","independentEngine":false}
+```
+
+`independentEngine` false marks an image that is not independent evidence
+(OT Fabric's own stack); the self-test records it as `independent: false` in
+`results.json`. Without `upstream` an image is an independent
+implementation, as every reference image is.
 
 [docs/CAPABILITIES.md](CAPABILITIES.md) has the matrix. Every document is
 described by a JSON Schema in [`schemas/`](../schemas): `capabilities`,

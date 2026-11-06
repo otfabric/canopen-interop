@@ -9,7 +9,8 @@
 # with validate-documents.py).
 #
 # Environment: DOCKER (default docker), IMAGE_TEMPLATE (as selftest.py),
-#              REPORTS (default reports).
+#              ADAPTER_IMAGE_<adapter> (an image outside the release set, as
+#              scripts/lib.sh image_of), REPORTS (default reports).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 read -r -a DOCKER <<< "${DOCKER:-docker}"
@@ -25,7 +26,8 @@ expect() { # expect <exit> <code> <file> <description>
     fi
 }
 for a in "$@"; do
-    img=$(printf %s "$TEMPLATE" | sed "s/{adapter}/$a/")
+    override="ADAPTER_IMAGE_${a//-/_}"
+    img="${!override:-$(printf %s "$TEMPLATE" | sed "s/{adapter}/$a/")}"
     run() { "${DOCKER[@]}" run --rm --network none "$img" "$@"; }
     run print-capabilities > "$OUT/$a.capabilities.json"
     run print-version > "$OUT/$a.version.json"

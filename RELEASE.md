@@ -7,6 +7,24 @@ or `major`), or push the tag: it builds and self-tests every image
 natively on amd64 and arm64, pushes `<image>:vX.Y.Z-<arch>`, joins them into
 the multi-arch `<image>:vX.Y.Z` and publishes the release with the digests.
 
+## v0.4.0
+
+**Date:** 2026-11-06
+**Previous release:** v0.3.1
+
+### Added
+
+- OT Fabric's own stack: `own/go-canopen/` puts go-canopen behind the container contract, and the manual workflow "Own stack (go-canopen)" builds it from the latest go-canopen release, tests it on a vcan interface against the references of the latest release (CANopenNode, Lely, python canopen) on amd64 and arm64, and publishes it from `main` as `ghcr.io/otfabric/canopen-interop-otfabric:<go-canopen version>` and `:latest`. Not an independent implementation, not a reference, and not part of this or any release (otfabric/engineering ADR-0012).
+- Container contract 1.2: the capability document may carry `upstream` (`name`, `version`, `revision`, `independentEngine`); without it an image is independent, and `results.json` takes `independent` from it. The three reference images are unchanged.
+- `scripts/interop.sh <adapters…>` (`make interop`): the self-test between exactly those adapters. `scripts/lib.sh`: `ADAPTER_IMAGE_<adapter>` names the image of an adapter, for `scripts/smoke.sh` and `scripts/selftest.py` too.
+- `REQUIREMENTS.md` (R1: nothing outside `own/` names a library under test, checked in CI).
+
+### Changed
+
+- CI runs the self-test through `make interop`; `make selftest` stays as its alias.
+
+---
+
 ## v0.3.1
 
 **Date:** 2026-11-01

@@ -1,6 +1,6 @@
 # Capabilities
 
-What each image declares in `print-capabilities` (contract 1.1). Every
+What each reference image declares in `print-capabilities` (contract 1.1; 1.2 adds only the optional `upstream`, see the last section). Every
 `true` is exercised by a self-test scenario ([TESTING.md](../TESTING.md));
 `cia402` is verified only for its error path (no adapter provides a CiA 402
 drive, see [LIMITATIONS.md](../LIMITATIONS.md)).
@@ -65,3 +65,18 @@ their development branches) implements USDO or CANopen FD PDOs
 
 `deviceRpdo` is verified since 1.1 by the rpdo suite: python canopen's
 `rpdo-send` sends RPDO 1 to each device and the values are read back.
+
+## OT Fabric's own stack (`otfabric`, not a reference)
+
+`ghcr.io/otfabric/canopen-interop-otfabric` ([own/go-canopen](../own/go-canopen/README.md))
+declares every operation and every feature of contract 1.2 `true`, and
+`upstream` with `independentEngine: false` (contract 1.2): its results are
+recorded as `independent: false` and are no evidence about go-canopen from
+an independent implementation. Every declaration is exercised by the same
+suites of `scripts/selftest.py` against the three references (the own-stack
+workflow runs them with `scripts/interop.sh otfabric canopennode lely
+pythoncanopen`); `cia402` only by go-canopen's own interop suite, which has a
+CiA 402 drive. Its scenarios that end as skip are those of a reference's
+missing capability (for example a device without `deviceLimits`), and its
+known differences are those of the references already listed in
+`tests/known-differences.tsv`.

@@ -101,12 +101,22 @@ concise DCFs byte for byte. Accepted differences are listed in
 `known`, never as `pass`; a scenario a stack cannot do is `skip` with the
 reason. Results: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
+## OT Fabric's own stack
+
+`ghcr.io/otfabric/canopen-interop-otfabric` is go-canopen behind the same
+contract, so you can test your stack against ours the way we test ours against
+yours. Despite the name it shares with the reference images, it is not an
+independent implementation (its capabilities say `upstream.independentEngine:
+false`) and not part of a release of this repository, so its tags are
+go-canopen versions: see [own/go-canopen/README.md](own/go-canopen/README.md).
+
 ## Documentation
 
 | Document | Content |
 |----------|---------|
 | [docs/CONTAINER_CONTRACT.md](docs/CONTAINER_CONTRACT.md) | Commands, flags, documents, exit codes |
 | [docs/CAPABILITIES.md](docs/CAPABILITIES.md) | Capability matrix |
+| [REQUIREMENTS.md](REQUIREMENTS.md) | What this repository must and must not do |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | Self-test results |
 | [docs/FIXTURES.md](docs/FIXTURES.md) | The shared test device and the EDS/DCF fixtures |
 | [INTEROPERABILITY.md](INTEROPERABILITY.md) | How to test an implementation against these images |

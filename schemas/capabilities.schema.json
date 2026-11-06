@@ -170,6 +170,31 @@
           "type": "boolean"
         }
       }
+    },
+    "upstream": {
+      "description": "Contract 1.2: the implementation behind the image. Absent: an independent implementation.",
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "independentEngine"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "independentEngine": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

@@ -44,6 +44,9 @@ Environment:
   DOCKER            docker command (default "docker"; e.g. "sudo docker")
   IMAGE_TEMPLATE    image name with {adapter} (default
                     "ghcr.io/otfabric/canopen-interop-{adapter}:dev")
+  ADAPTER_IMAGE_<adapter>  the image of one adapter (a hyphen written as
+                    "_"), also one outside the release set, which this
+                    repository knows nothing about
   ADAPTERS          space-separated subset (default: all)
   SUITES            space-separated subset of od sdo nmt emcy pdo eds rpdo lss mpdo
                     boot cdcf (default: all)
@@ -97,7 +100,8 @@ def keep(adapter, docs):
 
 
 def image(adapter):
-    return TEMPLATE.format(adapter=adapter)
+    override = os.environ.get("ADAPTER_IMAGE_" + adapter.replace("-", "_"))
+    return override or TEMPLATE.format(adapter=adapter)
 
 
 def load_known():
@@ -1239,7 +1243,10 @@ def result_document(caps, versions, started):
     implementations = []
     for a in sorted(caps):
         v = versions.get(a, {})
-        i = {"name": a, "version": str(v.get("version") or "unknown"), "independent": True}
+        # What the image says of itself (contract 1.2); absent: independent.
+        upstream = caps[a].get("upstream") or {}
+        i = {"name": a, "version": str(v.get("version") or "unknown"),
+             "independent": upstream.get("independentEngine", True) is not False}
         for key in ("upstream", "revision"):
             if v.get(key):
                 i[key] = str(v[key])
