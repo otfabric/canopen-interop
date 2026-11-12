@@ -1,4 +1,4 @@
-github.com/otfabric/go-canbus v0.8.0 h1:z0etLlCxHqyQf17MB4/joDrVisNj+gzh1Zxih00xRZc=
-github.com/otfabric/go-canbus v0.8.0/go.mod h1:/+y8PRSu7tTGdoh2f7NTxaRAML86ePZSXLfjehaFDgc=
-github.com/otfabric/go-canopen v0.4.1 h1:SG9cJCQjCD7ZReE00EpTA5irfu2ueB8kH8HfnZIHm9c=
-github.com/otfabric/go-canopen v0.4.1/go.mod h1:mnQwOvdhOfyB10pK1JkiUQdS7jnv58Urbt7ly6eFsDE=
+github.com/otfabric/go-canbus v0.9.1 h1:fQ9t4HAc0cYlATyidi0g8NFpXhR4X0drjeDgvNSEdE4=
+github.com/otfabric/go-canbus v0.9.1/go.mod h1:6++FXYLk7/3z755xzfjoDrhKZYrwRg6GLOmo3AUCb3w=
+github.com/otfabric/go-canopen v0.5.1 h1:+dftevH4IGy4hdFZCTezkpEkhPiD1y3FJdKd9eDwiUQ=
+github.com/otfabric/go-canopen v0.5.1/go.mod h1:V08KHjkZxBpyEnnY9zDMA1+3IfIoyWF1X7CgCbm/99M=
