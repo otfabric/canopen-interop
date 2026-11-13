@@ -30,7 +30,7 @@ docker run --rm --network host ghcr.io/otfabric/canopen-interop-otfabric:<tag> \
   sdo-upload --interface vcan0 --node-id 5 --index 0x1018 --subindex 1
 ```
 
-`<tag>` is a go-canopen version such as `v0.4.1`, or `latest`, the newest one
+`<tag>` is a go-canopen version such as `v0.5.1`, or `latest`, the newest one
 published. A rebuild of a version replaces its tag, so pin the digest if you need
 an exact build. The digest is in the summary of the
 [workflow run](https://github.com/otfabric/canopen-interop/actions/workflows/own-go-canopen.yml),
