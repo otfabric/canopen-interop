@@ -2,9 +2,10 @@
 # summary; blocks only according to .otfabric/policy.yaml mode.
 name: Policy
 on:
-  pull_request:
   push:
     branches: [main]
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,5 +32,5 @@ jobs:
           GOWORK: "off"
           GOPRIVATE: github.com/otfabric/engineering
         run: |
-          go run github.com/otfabric/engineering/cmd/otfabric-policy@v1.2.0 check -format markdown . | tee -a "$GITHUB_STEP_SUMMARY"
-          go run github.com/otfabric/engineering/cmd/otfabric-policy@v1.2.0 check .
+          go run github.com/otfabric/engineering/cmd/otfabric-policy@v1.6.1 check -format markdown . | tee -a "$GITHUB_STEP_SUMMARY"
+          go run github.com/otfabric/engineering/cmd/otfabric-policy@v1.6.1 check .
