@@ -34,11 +34,13 @@ interface and checks the documents of docs/CONTAINER_CONTRACT.md:
           CiA 302-3 gives for the fixture values
 
 Selection is capability driven: a pair or scenario an adapter cannot do is
-recorded as "skip" with the reason, never as "pass". A failure listed in
-tests/known-differences.tsv is reported as "known", never as "pass". Results
-go to <reports>/selftest.json, <reports>/selftest.md and <reports>/results.json
-(the organisation's interop-result-v1); the exit status is 1 when a scenario
-failed, a known difference no longer reproduces, or nothing passed.
+recorded as "skip" with the reason, never as "pass" ("unsupported" in
+results.json; "not-tested" where the harness, not the stack, is the limit).
+A failure listed in tests/known-differences.tsv is reported as "known", never
+as "pass". Results go to <reports>/selftest.json, <reports>/selftest.md and
+<reports>/results.json (the organisation's interop-result-v1); the exit status
+is 1 when a scenario failed, a known difference no longer reproduces, or
+nothing passed.
 
 Environment:
   DOCKER            docker command (default "docker"; e.g. "sudo docker")
@@ -123,7 +125,10 @@ def known(suite, scenario, master, device):
     return None
 
 
-def record(suite, scenario, status, detail="", master="", device="", duration=0.0):
+def record(suite, scenario, status, detail="", master="", device="", duration=0.0, not_tested=False):
+    """not_tested: a skip that is a limit of the harness or of the run (what a
+    stack does cannot be observed, or no peer in the run can do its part), not
+    a capability the stack lacks; results.json records it as "not-tested"."""
     waiver = known(suite, scenario, master, device) if status in ("fail", "pass") else None
     if waiver and status == "fail":
         status, detail = "known", "%s [known: %s]" % (detail, waiver["why"])
@@ -134,6 +139,8 @@ def record(suite, scenario, status, detail="", master="", device="", duration=0.
          "status": status, "detail": detail, "seconds": round(duration, 2)}
     if status == "known":
         r["waiver"] = waiver["id"]
+    if not_tested:
+        r["notTested"] = True
     results.append(r)
     pair = (master + " -> " + device) if master or device else ""
     print("%-5s %-5s %-30s %-30s %s" % (status.upper(), suite, scenario, pair, detail[:200]), flush=True)
@@ -639,7 +646,7 @@ def suite_pdo(caps):
                       "3 PDOs, counter %s" % vals if code == 0 and ok else "exit %d: %s %s" % (
                           code, vals, result_of(docs).get("message", "")), m, d, start)
             if configurer is None:
-                record("pdo", "pdo-configure", "skip", "no adapter with pdo-configure", "", d)
+                record("pdo", "pdo-configure", "skip", "no adapter with pdo-configure", "", d, not_tested=True)
             else:
                 start = time.monotonic()
                 code, docs, _ = run(configurer, ["pdo-configure"] + base + [
@@ -875,7 +882,7 @@ def lss_pair(caps, m, s, serial):
             on_waiting = wait_node_id(dev, new_id, 3)
             if m == "lely":
                 record("lss", "lss-activate-on-waiting", "skip", "lely's LSS master sends NMT reset communication "
-                       "after the steps: activation by 'switch to waiting' is not observable", m, s)
+                       "after the steps: activation by 'switch to waiting' is not observable", m, s, not_tested=True)
             else:
                 check("lss", "lss-activate-on-waiting", on_waiting,
                       "node-ID %d active after switch-global:waiting (no NMT command)" % new_id if on_waiting else
@@ -1228,13 +1235,15 @@ OUTCOME = {"pass": "pass", "fail": "fail", "known": "known-difference", "skip": 
 
 
 def result_document(caps, versions, started):
-    """The run as interop-result-v1. A skip is "unsupported": selection is
-    capability driven, so a skip always means a stack lacks the capability."""
+    """The run as interop-result-v1. A skip is "unsupported" (selection is
+    capability driven: a stack lacks the capability), except a skip recorded
+    with not_tested, a limit of the harness or the run: "not-tested"."""
     docs = []
     for r in results:
         roles = {k: r[k] for k in ("master", "device") if r[k]} or {"harness": "selftest"}
         res = {"id": re.sub(r"[^a-z0-9._-]+", "-", "%s.%s" % (r["suite"], r["scenario"].lower())), "title": r["scenario"],
-               "suite": r["suite"], "roles": roles, "outcome": OUTCOME[r["status"]], "durationMs": int(r["seconds"] * 1000)}
+               "suite": r["suite"], "roles": roles, "outcome": "not-tested" if r.get("notTested") else OUTCOME[r["status"]],
+               "durationMs": int(r["seconds"] * 1000)}
         if r["status"] != "pass":
             res["reason"] = r["detail"] or r["status"]
         if r.get("waiver"):

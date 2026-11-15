@@ -107,6 +107,12 @@ COPY adapters/common/coi.py adapters/canopennode/adapter.py /opt/canopen-interop
 COPY fixtures /fixtures
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/canopen-interop/
 COPY licenses /usr/share/doc/canopen-interop/licenses
+# The licence texts again under /licenses/<component>/ (THIRD_PARTY_NOTICES.md).
+COPY LICENSE THIRD_PARTY_NOTICES.md /licenses/canopen-interop/
+COPY licenses/Apache-2.0.txt /licenses/canopennode/
+COPY licenses/Apache-2.0.txt /licenses/canopenlinux/
+COPY --from=build /out/licenses/CANopenNode-LICENSE /licenses/canopennode/LICENSE
+COPY --from=build /out/licenses/CANopenLinux-LICENSE /licenses/canopenlinux/LICENSE
 RUN printf '#!/bin/sh\nexec python3 /opt/canopen-interop/adapter.py "$@"\n' > /usr/local/bin/canopen-interop \
     && chmod 0755 /usr/local/bin/canopen-interop \
     && useradd --system --no-create-home --uid 10001 canopen

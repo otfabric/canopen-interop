@@ -6,14 +6,19 @@
    adapter program. Adapters reuse `adapters/common/coi.py` (command line,
    documents, exit codes); the CANopen work stays in the upstream stack.
 2. Pin everything: base image by digest, upstream by version, revision and
-   checksum; add the entry to [versions.yaml](versions.yaml) and make
-   `scripts/check-versions.sh` check it.
+   `source_sha256` (the source archive, or for a Python stack the wheel
+   pip installs); a `requirements.txt` lists `--hash=sha256:` for every
+   package and wheel and is installed with `--require-hashes
+   --only-binary=:all: --no-deps`. Add the entry to
+   [versions.yaml](versions.yaml) and make `scripts/check-versions.sh`
+   check it.
 3. Declare only capabilities a self-test scenario verifies; add the scenario
    when there is none. A difference between stacks that cannot be avoided
    goes to `tests/known-differences.tsv` with its explanation.
 4. Add the upstream licence to [licenses/](licenses) and
-   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); ship source where the
-   licence requires it.
+   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and copy it to
+   `/licenses/<component>/` in the image (`scripts/test_licenses.py`); ship
+   source where the licence requires it.
 5. Add it to `ADAPTERS` in the Makefile and `ALL_ADAPTERS` in
    `scripts/selftest.py`; `make ci` on Linux.
 

@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install jsonschema
+      - run: pip install -r requirements-dev.txt
       - run: make validate lint
       - name: No reference to a library under test
         # REQUIREMENTS.md R1: adapters, fixtures, scripts, schemas and tests must
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install jsonschema
+      - run: pip install -r requirements-dev.txt
 
       - name: Load the CAN modules and create vcan0
         run: scripts/ci-can-modules.sh && make vcan ADMIN=sudo

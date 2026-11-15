@@ -44,7 +44,12 @@ it.
 
 Every result is `pass`, `fail`, `known` (a failure listed in
 [tests/known-differences.tsv](tests/known-differences.tsv)) or `skip` (a
-capability the stack lacks, with the reason). Reports: `reports/selftest.json`,
+capability the stack lacks, with the reason; `unsupported` in `results.json`).
+Two skips are limits of the harness, not of a stack, and are `not-tested` in
+`results.json` (`notTested` in `selftest.json`): `lss-activate-on-waiting`
+with lely as LSS master (it resets communication after the steps, so the
+activation cannot be observed) and `pdo-configure` when no adapter of the run
+has pdo-configure. Reports: `reports/selftest.json`,
 `reports/results.json` (interop-result-v1: a run with no pass, or with a
 known difference that no longer reproduces, fails), `reports/selftest.md`, every document in `reports/documents/` (validated by
 `make documents` against `schemas/`); `scripts/compat-report.py` renders
@@ -56,6 +61,8 @@ known difference that no longer reproduces, fails), `reports/selftest.md`, every
 arm64 runner every image built natively, the smoke test, the whole self-test
 on vcan and the document validation; the compatibility report is the job
 summary. `release.yml` repeats this for a release and pushes what it tested.
+The workflows install jsonschema 4.26.0 from `requirements-dev.txt`
+(versions.yaml `tools`).
 `upstream.yml` compares the pins (and the base-image digests) with the latest
 upstream daily and keeps an issue open while one is behind.
 
@@ -67,6 +74,6 @@ upstream daily and keeps an issue open while one is behind.
 | Push to a branch | none | nothing; dispatch `ci.yml` to test a branch without a pull request |
 | Push to `main` | `policy.yml` | the light checks; the merged commit was tested as the pull request's merge commit |
 | Schedule | `upstream.yml` | the scheduled runs, on `main` |
-| Release | `release.yml` | the release workflow tests the release commit again |
+| Release | `release.yml` | on a `v*.*.*` tag or a manual run from `main`: the version check (versions.yaml and RELEASE.md name the tag); then natively on amd64 and on arm64 `make validate`, the image builds, `make smoke`, the whole self-test (`make selftest`, every suite on `vcan0`) and `make documents`, and only then the push of the tested images as `<tag>-<arch>`; last the multi-arch tags, `manifest.json` with the digests and the GitHub release. `make lint` does not run |
 
 Documentation means an added or modified `*.md` file outside `.github/`, `testdata/` and `vendor/`, other than `AGENTS.md` and `CLAUDE.md`. A deleted or renamed document, or any other file, runs everything. `OT Fabric Required Checks` fails unless every job that applies succeeded; its summary lists them.

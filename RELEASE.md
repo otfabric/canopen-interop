@@ -7,6 +7,28 @@ or `major`), or push the tag: it builds and self-tests every image
 natively on amd64 and arm64, pushes `<image>:vX.Y.Z-<arch>`, joins them into
 the multi-arch `<image>:vX.Y.Z` and publishes the release with the digests.
 
+## v0.4.1
+
+**Date:** 2026-11-16
+**Previous release:** v0.4.0
+
+Container contract 1.2 unchanged: the images behave as in v0.4.0. Their Python packages are now pinned by hash, they carry the licence texts in a second place as well, and two results in `results.json` say what they are.
+
+### Changed
+
+- The pythoncanopen and lely images install every Python package, the transitive ones included, only from an artefact whose SHA-256 `adapters/<name>/requirements.txt` lists (`pip install --require-hashes --only-binary=:all: --no-deps`): a wheel, and for empy, which publishes none, its source archive (`--no-binary=empy`). Before, the requirements named versions only. versions.yaml records `source_sha256` of the canopen wheel for pythoncanopen, so every implementation has one.
+- `scripts/check-versions.sh` (`make validate`) also fails when an implementation has no `source_sha256`; a requirement has no `--hash=sha256:` or is not pinned to one version; a Python Dockerfile installs without `--require-hashes`, `--only-binary=:all:` or `--no-deps`; the `source_sha256` of a Python stack is not a hash of its package; or a workflow or the Makefile installs or runs a tool at another version than `tools` in versions.yaml. `scripts/test_check_versions.py` covers each case.
+- Every image also carries its licence texts under `/licenses/<component>/` (LICENSE and THIRD_PARTY_NOTICES.md under `/licenses/canopen-interop/`); `/usr/share/doc/` keeps them as before. `scripts/smoke.sh` checks it in every image, `scripts/test_licenses.py` the Dockerfiles against THIRD_PARTY_NOTICES.md.
+- jsonschema is installed at exactly 4.26.0 (`requirements-dev.txt`) by every workflow and by the container fallback of `make documents`, which now runs `python:3.12-slim-bookworm` by digest. `make lint` without a local shellcheck runs `koalaman/shellcheck:v0.11.0` by digest. versions.yaml records the tools under `tools`.
+- `results.json`: two skips that are limits of the harness, not of a stack, are `not-tested` instead of `unsupported`: `lss-activate-on-waiting` with lely as LSS master (lely resets communication after the steps, so the activation cannot be observed) and `pdo-configure` when no adapter of the run has pdo-configure. `selftest.json` marks them `notTested`; their status stays `skip`.
+- The manual Own stack (go-canopen) workflow pulls the reference images by the digests of the harness release's `manifest.json` (`scripts/reference-images.sh`), not by tag, and lists them in its summary. `own/go-canopen` builds against go-canopen v0.6.3 and go-canbus v0.11.0 locally; the image takes the latest go-canopen release, as before.
+
+### Unchanged
+
+- The exit codes of contract 1.2 (2 usage or unsupported, 3 timeout, 4 interface, 5 protocol); every image and `own/go-canopen` return them as the contract documents. Adopting the organisation exit codes is left to a later contract version.
+
+---
+
 ## v0.4.0
 
 **Date:** 2026-11-06

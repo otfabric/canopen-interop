@@ -50,8 +50,12 @@ ENV UPSTREAM_VERSION=v2.3.5 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/opt/canopen-interop:/opt/lely/dcf-tools \
     PATH=/opt/lely/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Every package is pinned by version and sha256 (requirements.txt): wheels
+# only, except empy, which publishes none and is built from its hash-checked
+# source archive (--no-binary=empy after --only-binary=:all:; order matters).
 COPY adapters/lely/requirements.txt /opt/canopen-interop/requirements.txt
-RUN pip install --no-cache-dir --root-user-action=ignore --no-deps -r /opt/canopen-interop/requirements.txt \
+RUN pip install --no-cache-dir --root-user-action=ignore --no-deps --only-binary=:all: --no-binary=empy --require-hashes \
+        -r /opt/canopen-interop/requirements.txt \
     && pip check
 COPY --from=build /opt/lely/lib/ /opt/lely/lib/
 COPY --from=build /opt/lely/bin/lely-coi /opt/lely/bin/lely-coi
@@ -62,6 +66,11 @@ COPY adapters/common/coi.py adapters/lely/adapter.py /opt/canopen-interop/
 COPY fixtures /fixtures
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/canopen-interop/
 COPY licenses /usr/share/doc/canopen-interop/licenses
+# The licence texts again under /licenses/<component>/ (THIRD_PARTY_NOTICES.md).
+COPY LICENSE THIRD_PARTY_NOTICES.md /licenses/canopen-interop/
+COPY licenses/Apache-2.0.txt licenses/lely-core-NOTICE.txt /licenses/lely-core/
+COPY --from=build /out/licenses/ /licenses/lely-core/
+COPY licenses/python-can-LGPL-3.0.txt licenses/python-can-GPL-3.0.txt /licenses/empy/
 RUN rm -rf /opt/lely/lib/pkgconfig /opt/lely/lib/*.la \
     && printf '#!/bin/sh\nexec python3 /opt/canopen-interop/adapter.py "$@"\n' > /usr/local/bin/canopen-interop \
     && chmod 0755 /usr/local/bin/canopen-interop \

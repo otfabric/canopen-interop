@@ -1,4 +1,12 @@
-# Lely's dcf-tools (dcfgen) at run time. Every package is pinned.
-PyYAML==6.0.3
-empy==3.3.4
-setuptools==80.9.0
+# Lely's dcf-tools (dcfgen) at run time. Every package is pinned by version
+# and by sha256 (the Dockerfile: pip install --require-hashes --no-deps): the
+# wheels pip may install for CPython 3.12 on linux/amd64 and linux/arm64, and
+# for empy, which publishes no wheel, its source archive (--no-binary=empy).
+# The hashes are those PyPI publishes for the release.
+PyYAML==6.0.3 \
+    --hash=sha256:9149cad251584d5fb4981be1ecde53a1ca46c891a79788c0df828d2f166bda28 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
+empy==3.3.4 \
+    --hash=sha256:73ac49785b601479df4ea18a7c79bc1304a8a7c34c02b9472cf1206ae88f01b3
+setuptools==80.9.0 \
+    --hash=sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922

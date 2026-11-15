@@ -5,7 +5,8 @@
 # every image: print-capabilities and print-version documents, print-fixture,
 # exit 2 with an error document for an unsupported operation (when the image
 # has one) and for a usage error, exit 4 for a missing interface, eds-check of
-# the shared EDS and a concise DCF (when supported). Documents go to $REPORTS/smoke (validate
+# the shared EDS and a concise DCF (when supported), licence texts under
+# /licenses/<component>/. Documents go to $REPORTS/smoke (validate
 # with validate-documents.py).
 #
 # Environment: DOCKER (default docker), IMAGE_TEMPLATE (as selftest.py),
@@ -59,6 +60,11 @@ for a in "$@"; do
         if [[ $code -ne 0 ]] || ! grep -q '"data":"0100000017100002000000e803"' "$OUT/$a.cdcf.jsonl"; then
             echo "FAIL $a: cdcf of 0x1017 of interop-device-node5.dcf (exit $code)"; fail=1
         fi
+    fi
+    # The licence texts: the adapter's own and at least one other component.
+    if ! "${DOCKER[@]}" run --rm --network none --entrypoint sh "$img" -c \
+        'test -s /licenses/canopen-interop/LICENSE && [ "$(ls /licenses | wc -l)" -ge 2 ]'; then
+        echo "FAIL $a: no licence texts under /licenses/<component>/"; fail=1
     fi
     echo "ok   $a: $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["upstream"], d["version"])' "$OUT/$a.version.json") [$ops]"
 done
