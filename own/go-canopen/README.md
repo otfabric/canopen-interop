@@ -65,7 +65,10 @@ latest go-canopen release and the latest harness release, and prints them. It
 builds the image, loads the CAN modules and creates `vcan0` on the runner, runs
 the smoke test and the cross-stack self-test (every suite of
 `scripts/selftest.py`, against the references of that harness release) on both
-architectures, then publishes `:<go-canopen version>` and `:latest`. Run from a
+architectures, then publishes `:<go-canopen version>` and `:latest`. It pulls
+the references by the digests in that release's `manifest.json`
+(`scripts/reference-images.sh`), not by tag, and lists them in the summary;
+a reference the manifest does not name by digest stops the run. Run from a
 branch, it stops before publishing. Nothing runs it automatically, so after a
 go-canopen release the image stays on the old version until someone does.
 

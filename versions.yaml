@@ -2,8 +2,14 @@
 # Upstream pins and base image digests are release inputs; nothing floats.
 # The Dockerfiles and adapters/*/requirements.txt are the source of truth for
 # a build: scripts/check-versions.sh fails when this file disagrees with them.
+#
+# Every implementation records source_sha256, the sha256 of the upstream
+# artefact its build verifies: the source archive of a C stack (checked with
+# sha256sum in its Dockerfile), the wheel of a Python stack (a --hash of its
+# requirements.txt, installed with --require-hashes). revision is the upstream
+# commit of the release, for reference.
 
-interop_version: "0.4.0"
+interop_version: "0.4.1"
 contract_version: "1.2"          # docs/CONTAINER_CONTRACT.md; documents carry schemaVersion "1.0" (the 1.x line)
 fixture_schema: "1.1"            # fixtures/eds (CiA 306 EDS/DCF), docs/FIXTURES.md; 1.1 adds 0x1007, LSS_Supported=1 and two fixtures
 
@@ -19,6 +25,13 @@ base_images:
   # Used by own/go-canopen only (the otfabric image), as GOLANG_DIGEST and DEBIAN_DIGEST.
   golang: "golang:1.27.2-trixie@sha256:e58d6f83b3416618d8bcac2b3dde1b7f7e3c4a77d25e88637f8bbae81536c48d"
   debian-trixie: "debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4"
+
+# Tools of the workflows and the Makefile, installed or pulled at exactly these
+# versions: Python packages from requirements-dev.txt (pip install -r), images
+# by digest. A library image the Makefile runs as a tool is one of base_images.
+tools:
+  jsonschema: "4.26.0"           # requirements-dev.txt: validate-documents.py, interop_result.py
+  shellcheck: "koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d"   # make lint without a local shellcheck; multi-arch index
 
 implementations:
   canopennode:
@@ -53,7 +66,7 @@ implementations:
     language: "C/C++"
     stack: "liblely-coapp/liblely-co on SocketCAN (io2) through adapters/lely/lely-coi.cpp; Python dcf-tools (dcfchk, dcfgen)"
     roles: [device, sdo-upload, sdo-download, nmt, listen, pdo-receive, eds-check, lss, mpdo-send, mpdo-receive, boot, cdcf]
-    python_requirements: "adapters/lely/requirements.txt (PyYAML 6.0.3, empy 3.3.4, setuptools 80.9.0 for dcfgen)"
+    python_requirements: "adapters/lely/requirements.txt (PyYAML 6.0.3, empy 3.3.4, setuptools 80.9.0 for dcfgen), each with its sha256; empy has no wheel and is built from its hash-checked source archive"
     published: true
     note: "The image ships the source tarball in /usr/share/src/lely."
 
@@ -64,6 +77,7 @@ implementations:
     package: "canopen"
     version: "2.4.1"               # latest release (2025-08-05)
     revision: "317fd3d61513b33ddb1aaf8a3ea2c23384a275ee"
+    source_sha256: "651dfb189978fb9083f491128e9fb8cb0e85dc8ccb82b12dd7139236d0080b77"   # canopen-2.4.1-py3-none-any.whl, the artefact pip installs
     license: "MIT"
     language: "Python"
     stack: "python canopen on python-can 4.6.1 (socketcan)"

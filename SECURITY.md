@@ -16,9 +16,13 @@ images.
 * They need `--network host` (CAN interfaces live in a network namespace) but
   no added capabilities: CAN raw sockets are unprivileged and the images run
   as an unprivileged user. Do not run them `--privileged`.
-* Base images and every upstream package are pinned (digest, version,
-  checksum); `scripts/check-versions.sh` keeps
-  [versions.yaml](versions.yaml) in step with them.
+* Base images are pinned by digest; the C stacks by tag or commit and the
+  SHA-256 of their source archives; every Python package, the transitive
+  ones included, by version and the SHA-256 of its wheels (empy, which has
+  no wheel, of its source archive), installed with `pip install
+  --require-hashes`. `scripts/check-versions.sh` keeps
+  [versions.yaml](versions.yaml) in step with them and fails on a
+  requirement without a hash.
 * Adapters read fixtures and input files given on the command line and
   never execute input. JSON input is parsed with the language's standard
   parser; EDS files are parsed by the upstream stacks.

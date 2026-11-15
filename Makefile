@@ -70,8 +70,8 @@ documents: ## Validate every document the smoke test and the self-test kept in r
 	@if python3 -c 'import jsonschema' 2>/dev/null; then \
 		python3 scripts/validate-documents.py reports; \
 	else \
-		$(RETRY) docker run --rm -v "$(CURDIR):/work:ro" -w /work $(TOOLS_REGISTRY)/library/python:3.12-slim \
-			sh -c 'pip install -q --root-user-action=ignore jsonschema && python scripts/validate-documents.py reports'; \
+		$(RETRY) docker run --rm -v "$(CURDIR):/work:ro" -w /work $(TOOLS_REGISTRY)/library/python:3.12-slim-bookworm@sha256:6dd8b6dab6b3adc7812bab69eca5dbdc1a5cc690ad28306d234ffb4ef8ac9753 \
+			sh -c 'pip install -q --root-user-action=ignore -r requirements-dev.txt && python scripts/validate-documents.py reports'; \
 	fi
 
 lint: ## Shellcheck the scripts, byte-compile the Python adapters and scripts
@@ -79,7 +79,7 @@ lint: ## Shellcheck the scripts, byte-compile the Python adapters and scripts
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck --severity=warning -x -P scripts scripts/*.sh; \
 	else \
-		$(RETRY) docker run --rm -v "$(CURDIR):/mnt:ro" $(TOOLS_REGISTRY)/koalaman/shellcheck:stable --severity=warning -x -P scripts scripts/*.sh; \
+		$(RETRY) docker run --rm -v "$(CURDIR):/mnt:ro" $(TOOLS_REGISTRY)/koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d --severity=warning -x -P scripts scripts/*.sh; \
 	fi
 	@python3 -m py_compile adapters/*/*.py scripts/*.py && rm -rf adapters/*/__pycache__ scripts/__pycache__
 	@sh -n adapters/canopennode/od-counts.sh

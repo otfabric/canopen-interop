@@ -1,0 +1,4 @@
+# Tools of make documents and the workflows (pip install -r
+# requirements-dev.txt). The versions are those of versions.yaml tools;
+# scripts/check-versions.sh fails when they differ.
+jsonschema==4.26.0

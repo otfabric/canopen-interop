@@ -95,7 +95,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install jsonschema
+      - run: pip install -r requirements-dev.txt
 
       - name: Build from go-canopen ${{ needs.version.outputs.upstream }}
         run: |
@@ -129,13 +129,22 @@ jobs:
       - name: Load the CAN modules and create vcan0
         run: scripts/ci-can-modules.sh && sudo scripts/setup-vcan.sh vcan0
 
+      # By the digests in manifest.json of that release, not by tag: a tag
+      # pushed again after the release does not change what runs. The
+      # ADAPTER_IMAGE_<adapter> variables point the self-tests at them.
       - name: Pull the reference images of ${{ needs.version.outputs.harness }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          for a in canopennode lely pythoncanopen; do
-            scripts/retry.sh docker pull --quiet "ghcr.io/otfabric/canopen-interop-${a}:${VERSION}"
-            docker run --rm "ghcr.io/otfabric/canopen-interop-${a}:${VERSION}" print-version \
-              | jq -r --arg image "${a}:${VERSION}" '"- \($image): \(.upstream) \(.version)"' | tee -a "$GITHUB_STEP_SUMMARY"
-          done
+          set -euo pipefail
+          scripts/retry.sh gh release download "${VERSION}" --repo "${GITHUB_REPOSITORY}" --pattern manifest.json --dir harness-release
+          scripts/reference-images.sh harness-release/manifest.json canopennode lely pythoncanopen > references.env
+          while IFS='=' read -r _ ref <&3; do
+            scripts/retry.sh docker pull --quiet "${ref}"
+            docker run --rm "${ref}" print-version \
+              | jq -r --arg image "${ref}" '"- `\($image)`: \(.upstream) \(.version)"' | tee -a "$GITHUB_STEP_SUMMARY"
+          done 3< references.env
+          cat references.env >> "$GITHUB_ENV"
 
       - name: Smoke, cross-stack self-test against the references, document schemas
         working-directory: harness

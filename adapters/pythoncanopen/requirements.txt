@@ -1,5 +1,16 @@
-canopen==2.4.1
-packaging==26.3
-python-can==4.6.1
-typing_extensions==4.16.0
-wrapt==1.17.3
+# Every package, including the transitive ones, is pinned by version and by
+# the sha256 of each wheel pip may install for CPython 3.12 on linux/amd64 and
+# linux/arm64 (the Dockerfile: pip install --require-hashes --only-binary=:all:
+# --no-deps). The hashes are those PyPI publishes for the release.
+canopen==2.4.1 \
+    --hash=sha256:651dfb189978fb9083f491128e9fb8cb0e85dc8ccb82b12dd7139236d0080b77
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+python-can==4.6.1 \
+    --hash=sha256:17f95255868a95108dcfcb90565a684dad32d5a3ebb35afd14f739e18c84ff6c
+typing_extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+wrapt==1.17.3 \
+    --hash=sha256:042ec3bb8f319c147b1301f2393bc19dba6e176b7da446853406d041c36c7828 \
+    --hash=sha256:3af60380ba0b7b5aeb329bc4e402acd25bd877e98b3727b0135cb5c2efdaefe9 \
+    --hash=sha256:7171ae35d2c33d326ac19dd8facb1e82e5fd04ef8c6c0e394d7af55a55051c22

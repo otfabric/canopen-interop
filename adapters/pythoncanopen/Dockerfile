@@ -14,15 +14,21 @@ ENV UPSTREAM_REVISION=317fd3d61513b33ddb1aaf8a3ea2c23384a275ee \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/opt/canopen-interop
 
-# Every package, including the transitive ones, is pinned.
+# Every package, including the transitive ones, is pinned by version and
+# installed only from a wheel whose sha256 requirements.txt lists.
 COPY adapters/pythoncanopen/requirements.txt /opt/canopen-interop/requirements.txt
-RUN pip install --no-cache-dir --root-user-action=ignore --no-deps -r /opt/canopen-interop/requirements.txt \
+RUN pip install --no-cache-dir --root-user-action=ignore --no-deps --only-binary=:all: --require-hashes \
+        -r /opt/canopen-interop/requirements.txt \
     && pip check
 
 COPY adapters/common/coi.py adapters/pythoncanopen/adapter.py /opt/canopen-interop/
 COPY fixtures /fixtures
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/canopen-interop/
 COPY licenses /usr/share/doc/canopen-interop/licenses
+# The licence texts again under /licenses/<component>/ (THIRD_PARTY_NOTICES.md).
+COPY LICENSE THIRD_PARTY_NOTICES.md /licenses/canopen-interop/
+COPY licenses/canopen-MIT.txt /licenses/canopen/
+COPY licenses/python-can-LGPL-3.0.txt licenses/python-can-GPL-3.0.txt /licenses/python-can/
 RUN printf '#!/bin/sh\nexec python3 /opt/canopen-interop/adapter.py "$@"\n' > /usr/local/bin/canopen-interop \
     && chmod 0755 /usr/local/bin/canopen-interop \
     && useradd --system --no-create-home --uid 10001 canopen

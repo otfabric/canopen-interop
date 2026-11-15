@@ -49,6 +49,14 @@ class Results(unittest.TestCase):
         self.assertEqual(doc["results"][0]["outcome"], "unsupported")
         self.assertTrue(interop_result.problems(doc))
 
+    def test_a_harness_limit_is_not_tested_not_unsupported(self):
+        st.record("lss", "lss-activate-on-waiting", "skip", "not observable", "lely", "canopennode", not_tested=True)
+        st.record("pdo", "pdo-configure", "skip", "no adapter with pdo-configure", "", "lely", not_tested=True)
+        st.record("sdo", "block", "skip", "no block client", "lely", "lely")
+        doc = self.document()
+        self.assertEqual([r["outcome"] for r in doc["results"]], ["not-tested", "not-tested", "unsupported"])
+        self.assertEqual(interop_result.schema_errors(doc), [])
+
     def test_a_single_stack_scenario_has_a_role(self):
         st.record("eds", "x.eds", "pass", "", "", "")
         self.assertEqual(self.document()["results"][0]["roles"], {"harness": "selftest"})
